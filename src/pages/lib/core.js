@@ -50,8 +50,9 @@ export async function boot({ popup = false, hideOnBlur = false } = {}) {
     if (!e.target.closest('textarea, input')) e.preventDefault();
   });
   if (popup) {
+    // Esc closes the popup – unless a screen used it first to go back a step (it then calls preventDefault).
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) hide();
+      if (e.key === 'Escape') setTimeout(() => { if (!e.defaultPrevented) hide(); }, 0);
     });
   }
   if (hideOnBlur) {

@@ -66,9 +66,20 @@ pub fn stale() -> bool {
     r.list.iter().all(|c| !c.ok) || chrono::Utc::now().timestamp_millis() - r.updated > MAX_AGE_MS
 }
 
-/// Working candidates, fastest first.
+/// Working candidates, fastest first – then, as backups, models that were only busy or
+/// rate-limited during the last check (that is temporary; they often work a minute later).
 pub fn ranked() -> Vec<(String, String)> {
-    RANK.lock().unwrap().list.iter().filter(|c| c.ok).map(|c| (c.provider.clone(), c.model.clone())).collect()
+    let r = RANK.lock().unwrap();
+    let busy = |c: &&Cand| {
+        let n = c.note.to_lowercase();
+        !c.ok && (n.contains("busy") || n.contains("too many") || n.contains("rate") || n.contains("slow"))
+    };
+    r.list
+        .iter()
+        .filter(|c| c.ok)
+        .chain(r.list.iter().filter(busy))
+        .map(|c| (c.provider.clone(), c.model.clone()))
+        .collect()
 }
 
 /// A model failed during real use: send it to the back of the line until the next check.

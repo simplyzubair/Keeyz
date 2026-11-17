@@ -12,6 +12,7 @@ fn a(id: &str, name: &str, icon: &str, output: &str, prompt: &str) -> ActionDef 
         hidden: false,
         favorite: matches!(id, "fix" | "translate" | "summarize" | "professional"),
         output: output.into(),
+        edited: false,
     }
 }
 
@@ -32,7 +33,7 @@ pub fn builtin_actions() -> Vec<ActionDef> {
         a("elaborate", "Expand", "➕", "replace",
           "Expand the text with more helpful detail, examples or context. Keep the same tone and intent. Do not invent facts about real people or numbers."),
         a("summarize", "Summarize", "📝", "add",
-          "Summarize the text in a few short sentences that keep the main points. Use the text's language."),
+          "Summarize the text in a few short sentences that keep the main points. Write the summary in the same language as the text."),
         a("explain", "Explain simply", "💡", "add",
           "Explain what this text means in plain, simple words a smart 12-year-old would follow. No jargon."),
         a("bullet_points", "Bullet points", "•", "replace",
@@ -135,6 +136,16 @@ pub fn system_for(settings: &Settings, task: &str, faithful: bool) -> String {
         s.push_str(settings.style_text.trim());
     }
     s
+}
+
+/// "Answer in English." – detected from the user's text, so small models don't drift into another language.
+pub fn language_rule(text: &str) -> String {
+    match whatlang::detect(text) {
+        Some(info) if info.is_reliable() || text.split_whitespace().count() >= 6 => {
+            format!("\nThe user's text is in {}. Write your answer in {} only.", info.lang().eng_name(), info.lang().eng_name())
+        }
+        _ => String::new(),
+    }
 }
 
 pub fn fill(prompt: &str, lang: &str, limit: Option<u32>) -> String {

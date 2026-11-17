@@ -17,6 +17,8 @@ pub struct ActionDef {
     pub favorite: bool,
     /// "replace" = rewrites the selection, "add" = writes new text (reply, answer…)
     pub output: String,
+    /// true once the user changed a built-in action – then app updates keep their version
+    pub edited: bool,
 }
 
 impl Default for ActionDef {
@@ -30,6 +32,7 @@ impl Default for ActionDef {
             hidden: false,
             favorite: false,
             output: "replace".into(),
+            edited: false,
         }
     }
 }
@@ -242,8 +245,16 @@ impl Settings {
     /// Make sure every built-in action / workflow / shortcut exists (keeps user edits).
     pub fn merge_builtins(&mut self) {
         for b in crate::prompts::builtin_actions() {
-            if !self.actions.iter().any(|a| a.id == b.id) {
-                self.actions.push(b);
+            match self.actions.iter_mut().find(|a| a.id == b.id) {
+                // refresh wording from the app, keep the user's star / hidden choices
+                Some(a) if a.builtin && !a.edited => {
+                    a.name = b.name;
+                    a.prompt = b.prompt;
+                    a.icon = b.icon;
+                    a.output = b.output;
+                }
+                Some(_) => {}
+                None => self.actions.push(b),
             }
         }
         for w in crate::prompts::builtin_workflows() {

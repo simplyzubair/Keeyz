@@ -30,6 +30,9 @@ function setTab(t) {
 }
 
 function calc(s) {
+  // "15% of 340" / "15 percent of 340"
+  const pct = s.match(/^\s*([\d.]+)\s*(?:%|percent)\s*of\s*([\d.,]+)\s*$/i);
+  if (pct) return +((parseFloat(pct[1]) / 100) * parseFloat(pct[2].replace(/,/g, ''))).toFixed(10);
   if (!/^[\d\s+\-*/().,%^x×÷]+$/.test(s) || !/\d/.test(s) || !/[+\-*/%^x×÷]/.test(s)) return null;
   try {
     const expr = s.replace(/×|x/g, '*').replace(/÷/g, '/').replace(/\^/g, '**').replace(/(\d+(?:\.\d+)?)%/g, '($1/100)').replace(/,/g, '');
@@ -50,7 +53,8 @@ function draw() {
     ['tool', 'settings', 'Settings', 'settings', S.shortcuts.show_app],
   ].map(([kind, id, name, ic, key]) => ({ kind, id, name, ic, meta: key }));
   const acts = S.actions.filter((a) => !a.hidden).map((a) => ({ kind: 'action', id: a.id, name: a.name, a, meta: a.builtin ? '' : 'Custom' }));
-  const wfs = S.workflows.map((w) => ({ kind: 'workflow', id: w.id, name: w.name, emo: w.icon, meta: `${w.steps.length} steps` }));
+  const WF_ICON = { meeting_notes: 'fileText', email_responder: 'mail', translate_polish: 'globe' };
+  const wfs = S.workflows.map((w) => ({ kind: 'workflow', id: w.id, name: w.name, ic: WF_ICON[w.id], emo: w.icon, meta: `${w.steps.length} steps` }));
   const match = (i) => !t || i.name.toLowerCase().includes(t);
   const groups = [];
   const c = calc(term);
@@ -106,9 +110,10 @@ async function run() {
 }
 
 // ---------------------------------------------------------------- chat
+let chatReq = 0;
 listen('ai-delta', (e) => {
-  if (!streaming) return;
-  streaming.content += e.payload;
+  if (!streaming || e.payload.req !== chatReq) return;
+  streaming.content += e.payload.text;
   streaming.el.querySelector('.txt').textContent = streaming.content;
   $('#msgs').scrollTop = $('#msgs').scrollHeight;
 });
@@ -134,7 +139,7 @@ async function send() {
   const el = bubble('assistant', '…');
   streaming = { el, content: '' };
   try {
-    const out = await invoke('chat', { messages: chat });
+    const out = await invoke('chat', { messages: chat, req: ++chatReq });
     chat.push({ role: 'assistant', content: out });
     el.querySelector('.txt').textContent = out;
     const acts = document.createElement('div');

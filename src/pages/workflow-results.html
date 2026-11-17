@@ -41,7 +41,9 @@
     function draw() {
       if (!run) return;
       const steps = run.workflow.steps || [];
-      $('#title').textContent = `${run.workflow.icon || '⛓'} ${run.workflow.name}`;
+      const WF_ICON = { meeting_notes: 'fileText', email_responder: 'mail', translate_polish: 'globe' };
+      const emoji = run.workflow.icon && run.workflow.icon !== '⛓' && !WF_ICON[run.workflow.id] ? `${esc(run.workflow.icon)} ` : '';
+      $('#title').innerHTML = emoji ? `${emoji}${esc(run.workflow.name)}` : `<span style="display:inline-flex;vertical-align:-3px;margin-right:6px;color:var(--text-2)">${icon(WF_ICON[run.workflow.id] || 'flows', 16)}</span>${esc(run.workflow.name)}`;
       $('#prog').textContent = run.status === 'running' ? `Running workflow… step ${run.results.length + 1} of ${steps.length}` : run.status === 'error' ? 'stopped early' : `${steps.length} steps done`;
       $('#body').innerHTML = `<details><summary>Your text (${run.original.length} characters)</summary><div class="result-text faint">${esc(run.original)}</div></details>`
         + steps.map((s, i) => {

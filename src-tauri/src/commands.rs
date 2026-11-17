@@ -61,11 +61,12 @@ fn task_for(s: &Settings, action: &ActionDef, lang: &str) -> String {
 }
 
 /// Stream an AI answer to `win` as "ai-delta" events.
-async fn stream_to(win: &WebviewWindow, settings: &Settings, system: String, messages: Vec<Msg>) -> R<String> {
+/// Each request carries the caller's id, so a window can ignore pieces of an older, still-running answer.
+async fn stream_to(win: &WebviewWindow, settings: &Settings, system: String, messages: Vec<Msg>, req: u64) -> R<String> {
     let w = win.clone();
-    let _ = w.emit("ai-start", ());
+    let _ = w.emit("ai-start", req);
     ai::complete(Request { system, messages, settings, max_tokens: 4096 }, move |d| {
-        let _ = w.emit("ai-delta", d.to_string());
+        let _ = w.emit("ai-delta", json!({"req": req, "text": d}));
     })
     .await
     .map_err(e)
@@ -200,6 +201,8 @@ pub async fn run_action(
     lang: Option<String>,
     instruction: Option<String>,
     previous: Option<String>,
+    refine: Option<String>,
+    req: Option<u64>,
 ) -> R<String> {
     let s = st.settings();
     let lang = lang.unwrap_or_default();
@@ -215,25 +218,30 @@ pub async fn run_action(
     } else {
         let a = s.action(&action).ok_or("Unknown action")?;
         let faithful = a.id == "fix" || a.id == "translate";
-        (prompts::system_for(&s, &task_for(&s, &a, &lang), faithful), text.clone(), a.id)
+        let mut sys = prompts::system_for(&s, &task_for(&s, &a, &lang), faithful);
+        if a.id != "translate" {
+            sys.push_str(&prompts::language_rule(&text));
+        }
+        (sys, text.clone(), a.id)
     };
-    // Refine an earlier result: keep the conversation.
-    let messages = match (previous, instruction.as_ref()) {
-        (Some(prev), Some(instr)) if !prev.is_empty() && action == "refine" => vec![
+    // Refine an earlier result (Shorter, Longer, "add a greeting"…): keep the conversation,
+    // so the AI changes its last answer instead of starting over.
+    let messages = match (previous, refine.as_ref()) {
+        (Some(prev), Some(change)) if !prev.trim().is_empty() && !change.trim().is_empty() => vec![
             Msg::user(user.clone()),
             Msg { role: "assistant".into(), content: prev },
-            Msg::user(format!("Change the result: {instr}\nReturn only the full new text.")),
+            Msg::user(format!("Change your last result: {change}\nReturn only the full new text, nothing else.")),
         ],
         _ => vec![Msg::user(user)],
     };
-    let out = stream_to(&win, &s, system, messages).await?;
+    let out = stream_to(&win, &s, system, messages, req.unwrap_or(0)).await?;
     st.record(HistoryItem { action: name, original: text, result: out.clone(), ..Default::default() });
     let _ = win.app_handle().emit("history-changed", ());
     Ok(out)
 }
 
 #[tauri::command]
-pub async fn chat(win: WebviewWindow, st: State<'_, AppState>, messages: Vec<Value>) -> R<String> {
+pub async fn chat(win: WebviewWindow, st: State<'_, AppState>, messages: Vec<Value>, req: Option<u64>) -> R<String> {
     let s = st.settings();
     let msgs = messages
         .iter()
@@ -244,7 +252,7 @@ pub async fn chat(win: WebviewWindow, st: State<'_, AppState>, messages: Vec<Val
         sys.push_str("\nUser style preferences: ");
         sys.push_str(&s.style_text);
     }
-    stream_to(&win, &s, sys, msgs).await
+    stream_to(&win, &s, sys, msgs, req.unwrap_or(0)).await
 }
 
 #[tauri::command]
@@ -364,6 +372,11 @@ pub fn save_action(app: AppHandle, st: State<AppState>, mut action: ActionDef) -
     let mut actions = st.settings().actions;
     if action.id.is_empty() {
         action.id = format!("custom_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    }
+    if action.builtin {
+        if let Some(orig) = crate::prompts::builtin_actions().into_iter().find(|b| b.id == action.id) {
+            action.edited = action.prompt.trim() != orig.prompt || action.name.trim() != orig.name;
+        }
     }
     match actions.iter_mut().find(|a| a.id == action.id) {
         Some(a) => *a = action,
@@ -505,22 +518,30 @@ pub async fn open_workflow(app: AppHandle, id: String, text: String) -> R<()> {
 }
 
 #[tauri::command]
-pub fn export_markdown(st: State<AppState>) -> R<String> {
+pub fn export_markdown(app: AppHandle, st: State<AppState>) -> R<String> {
     let run = st.workflow_run.lock().unwrap().clone();
     let mut md = format!("# {}\n\n## Your text\n\n{}\n", run["workflow"]["name"].as_str().unwrap_or("Workflow"), run["original"].as_str().unwrap_or(""));
     for r in run["results"].as_array().cloned().unwrap_or_default() {
         md.push_str(&format!("\n## {}\n\n{}\n", r["label"].as_str().unwrap_or(""), r["text"].as_str().unwrap_or("")));
     }
-    let dir = dirs_documents().join("Keeyz");
-    std::fs::create_dir_all(&dir).map_err(e)?;
-    let file = dir.join(format!("workflow-{}.md", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-    std::fs::write(&file, md).map_err(e)?;
-    Ok(file.to_string_lossy().to_string())
+    // Downloads is not covered by Windows' "Controlled folder access"; Documents often is.
+    let name = format!("workflow-{}.md", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+    let mut dirs = vec![];
+    if let Ok(d) = app.path().download_dir() {
+        dirs.push(d.join("Keeyz"));
+    }
+    dirs.push(st.dir.join("exports"));
+    let mut last = String::from("No folder to save to.");
+    for dir in dirs {
+        let file = dir.join(&name);
+        match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, &md)) {
+            Ok(_) => return Ok(file.to_string_lossy().to_string()),
+            Err(err) => last = err.to_string(),
+        }
+    }
+    Err(format!("Couldn't save the file: {last}"))
 }
 
-fn dirs_documents() -> std::path::PathBuf {
-    std::env::var("USERPROFILE").map(|p| std::path::PathBuf::from(p).join("Documents")).unwrap_or_else(|_| ".".into())
-}
 
 // ================================================================ clipboard history
 

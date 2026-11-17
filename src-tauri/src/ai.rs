@@ -142,7 +142,11 @@ fn friendly_net(e: reqwest::Error) -> anyhow::Error {
 }
 
 fn openai_base(s: &Settings) -> String {
-    match s.provider.as_str() {
+    openai_base_for(s, &s.provider)
+}
+
+fn openai_base_for(s: &Settings, provider: &str) -> String {
+    match provider {
         "openrouter" => "https://openrouter.ai/api/v1".into(),
         "custom" => s.endpoint_url.trim_end_matches('/').to_string(),
         _ => "https://api.openai.com/v1".into(),
@@ -175,7 +179,13 @@ async fn complete_auto(req: &Request<'_>, on_delta: &mut impl FnMut(&str)) -> Re
         bail!("Auto mode found no working model. Add an AI key in Settings → AI Provider (Gemini has a free tier), then click “Find fastest now”.");
     }
     let mut last = anyhow!("No model answered.");
-    for (provider, model) in list.into_iter().take(4) {
+    let mut skip: Vec<String> = vec![];
+    let mut tries = 0;
+    for (provider, model) in list {
+        if skip.contains(&provider) || tries >= 5 {
+            continue;
+        }
+        tries += 1;
         let mut s = req.settings.clone();
         s.provider = provider.clone();
         let r = Request { system: req.system.clone(), messages: req.messages.clone(), settings: &s, max_tokens: req.max_tokens };
@@ -185,7 +195,14 @@ async fn complete_auto(req: &Request<'_>, on_delta: &mut impl FnMut(&str)) -> Re
                 return Ok(out);
             }
             Err(e) => {
-                crate::fast::demote(&provider, &model);
+                let msg = e.to_string().to_lowercase();
+                let account_limit = msg.contains("limit") || msg.contains("quota") || msg.contains("credit") || msg.contains("did not accept this key");
+                if account_limit {
+                    // the whole account is out for now – other models of this provider would fail too
+                    skip.push(provider.clone());
+                } else {
+                    crate::fast::demote(&provider, &model);
+                }
                 last = e;
             }
         }
@@ -404,7 +421,7 @@ pub async fn list_models_for(settings: &Settings, provider: &str) -> Result<Vec<
                 .collect()
         }
         _ => {
-            let mut r = http.get(format!("{}/models", openai_base(settings)));
+            let mut r = http.get(format!("{}/models", openai_base_for(settings, p)));
             if !key.is_empty() { r = r.bearer_auth(&key); }
             let v: Value = r.send().await.map_err(friendly_net)?.json().await?;
             v["data"].as_array().cloned().unwrap_or_default().iter()
@@ -420,60 +437,109 @@ pub async fn list_models_for(settings: &Settings, provider: &str) -> Result<Vec<
 
 // ---------------------------------------------------------------- voice
 
-/// Transcribe audio (webm/ogg/wav bytes). Uses OpenAI (or OpenAI-compatible) or Gemini.
+/// Transcribe audio (webm/ogg/wav bytes) with whichever key works.
+/// Order: the fastest working providers from Auto mode, then Gemini, OpenAI, a local server.
+/// If one fails (no credit, busy, bad key) the next one is tried; only if all fail is an error shown.
 pub async fn transcribe(settings: &Settings, audio: Vec<u8>, mime: &str, lang: &str) -> Result<String> {
-    let http = client();
-    // Prefer the active provider; fall back to any provider that has a key and can transcribe.
-    let order = [settings.provider.as_str(), "openai", "gemini", "openrouter", "custom"];
+    let mut order: Vec<String> = vec![];
+    let ranked = crate::fast::ranked();
+    if settings.provider != "auto" {
+        order.push(settings.provider.clone());
+    }
+    for (p, _) in &ranked {
+        order.push(p.clone());
+    }
+    for p in ["gemini", "openai", "custom"] {
+        order.push(p.into());
+    }
+    order.dedup();
+    let mut seen = std::collections::HashSet::new();
+    order.retain(|p| seen.insert(p.clone()) && matches!(p.as_str(), "gemini" | "openai" | "custom"));
+
+    let mut last_err: Option<anyhow::Error> = None;
     for p in order {
-        let key = get_key(p);
-        match p {
-            "openai" | "custom" if !key.is_empty() || p == "custom" && settings.provider == "custom" => {
-                let base = if p == "openai" { "https://api.openai.com/v1".to_string() } else { settings.endpoint_url.trim_end_matches('/').to_string() };
-                let ext = if mime.contains("ogg") { "ogg" } else if mime.contains("wav") { "wav" } else { "webm" };
-                let part = reqwest::multipart::Part::bytes(audio.clone())
-                    .file_name(format!("audio.{ext}"))
-                    .mime_str(mime.split(';').next().unwrap_or("audio/webm"))?;
-                let mut form = reqwest::multipart::Form::new()
-                    .text("model", if p == "openai" { "gpt-4o-mini-transcribe" } else { "whisper-1" })
-                    .part("file", part);
-                if lang != "auto" && !lang.is_empty() {
-                    form = form.text("language", lang.split('-').next().unwrap_or(lang).to_string());
-                }
-                let mut r = http.post(format!("{base}/audio/transcriptions")).multipart(form);
-                if !key.is_empty() { r = r.bearer_auth(&key); }
-                let resp = r.send().await.map_err(friendly_net)?;
-                let status = resp.status().as_u16();
-                let body = resp.text().await.unwrap_or_default();
-                if status >= 400 {
-                    if p == "custom" { continue; }
-                    return Err(friendly_status(p, status, &body));
-                }
-                let v: Value = serde_json::from_str(&body).unwrap_or(json!({"text": body}));
-                return Ok(v["text"].as_str().unwrap_or("").trim().to_string());
-            }
+        let key = get_key(&p);
+        let res = match p.as_str() {
             "gemini" if !key.is_empty() => {
-                use base64::Engine;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&audio);
-                let model = if settings.provider == "gemini" { settings.model() } else { "gemini-flash-latest".into() };
-                let mut instr = "Transcribe this audio exactly as spoken, in the language spoken, with normal punctuation and capitalisation. Return only the transcript.".to_string();
-                if lang != "auto" && !lang.is_empty() { instr.push_str(&format!(" The language is {lang}.")); }
-                let resp = http
-                    .post(format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"))
-                    .header("x-goog-api-key", &key)
-                    .json(&json!({"contents": [{"parts": [
-                        {"inline_data": {"mime_type": mime.split(';').next().unwrap_or("audio/webm"), "data": b64}},
-                        {"text": instr}
-                    ]}]}))
-                    .send().await.map_err(friendly_net)?;
-                let status = resp.status().as_u16();
-                let body = resp.text().await.unwrap_or_default();
-                if status >= 400 { return Err(friendly_status("gemini", status, &body)); }
-                let v: Value = serde_json::from_str(&body)?;
-                return Ok(v.pointer("/candidates/0/content/parts/0/text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string());
+                // fastest Gemini models from Auto mode first, then safe defaults
+                let mut models: Vec<String> = ranked.iter().filter(|(rp, _)| rp == "gemini").map(|(_, m)| m.clone()).collect();
+                if settings.provider == "gemini" {
+                    models.insert(0, settings.model());
+                }
+                models.extend(["gemini-flash-lite-latest".to_string(), "gemini-flash-latest".to_string()]);
+                models.dedup();
+                let mut r = Err(anyhow!("Gemini could not transcribe."));
+                for m in models.into_iter().take(3) {
+                    r = transcribe_gemini(&key, &m, &audio, mime, lang).await;
+                    if r.is_ok() {
+                        break;
+                    }
+                }
+                r
             }
-            _ => {}
+            "openai" if !key.is_empty() => transcribe_openai("https://api.openai.com/v1", &key, "gpt-4o-mini-transcribe", &audio, mime, lang, &p).await,
+            "custom" if settings.provider == "custom" => {
+                let base = settings.endpoint_url.trim_end_matches('/').to_string();
+                transcribe_openai(&base, &key, "whisper-1", &audio, mime, lang, &p).await
+            }
+            _ => continue,
+        };
+        match res {
+            Ok(t) => return Ok(t),
+            Err(e) => last_err = Some(e),
         }
     }
-    bail!("Voice needs an OpenAI or Gemini key (Anthropic keys can't transcribe audio). Add one in Settings → AI Provider.")
+    Err(last_err.unwrap_or_else(|| anyhow!("Voice needs a Gemini or OpenAI key (Anthropic keys can't transcribe audio). Add one in Settings → AI Provider.")))
+}
+
+async fn transcribe_openai(base: &str, key: &str, model: &str, audio: &[u8], mime: &str, lang: &str, provider: &str) -> Result<String> {
+    let ext = if mime.contains("ogg") { "ogg" } else if mime.contains("wav") { "wav" } else { "webm" };
+    let part = reqwest::multipart::Part::bytes(audio.to_vec())
+        .file_name(format!("audio.{ext}"))
+        .mime_str(mime.split(';').next().unwrap_or("audio/webm"))?;
+    let mut form = reqwest::multipart::Form::new().text("model", model.to_string()).part("file", part);
+    if lang != "auto" && !lang.is_empty() {
+        form = form.text("language", lang.split('-').next().unwrap_or(lang).to_string());
+    }
+    let mut r = client().post(format!("{base}/audio/transcriptions")).multipart(form);
+    if !key.is_empty() {
+        r = r.bearer_auth(key);
+    }
+    let resp = r.send().await.map_err(friendly_net)?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    if status >= 400 {
+        return Err(friendly_status(provider, status, &body));
+    }
+    let v: Value = serde_json::from_str(&body).unwrap_or(json!({"text": body}));
+    Ok(v["text"].as_str().unwrap_or("").trim().to_string())
+}
+
+async fn transcribe_gemini(key: &str, model: &str, audio: &[u8], mime: &str, lang: &str) -> Result<String> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(audio);
+    let mut instr = "Transcribe this audio exactly as spoken, in the language spoken, with normal punctuation and capitalisation. Return only the transcript.".to_string();
+    if lang != "auto" && !lang.is_empty() {
+        instr.push_str(&format!(" The language is {lang}."));
+    }
+    let resp = client()
+        .post(format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"))
+        .header("x-goog-api-key", key)
+        .json(&json!({
+            "contents": [{"parts": [
+                {"inline_data": {"mime_type": mime.split(';').next().unwrap_or("audio/webm"), "data": b64}},
+                {"text": instr}
+            ]}],
+            "generationConfig": gemini_config(model, 2048)
+        }))
+        .send()
+        .await
+        .map_err(friendly_net)?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    if status >= 400 {
+        return Err(friendly_status("gemini", status, &body));
+    }
+    let v: Value = serde_json::from_str(&body)?;
+    Ok(v.pointer("/candidates/0/content/parts/0/text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string())
 }

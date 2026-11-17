@@ -15,7 +15,7 @@ $('#tbClose').onclick = () => win.close();
 $$('.rail-btn[data-view]').forEach((b) => (b.onclick = () => show(b.dataset.view)));
 $$('.rail-btn[data-tool]').forEach((b) => (b.onclick = () => invoke('open_tool_cmd', { tool: b.dataset.tool })));
 listen('navigate', (e) => show(e.payload));
-listen('history-changed', () => current === 'home' && renderHome());
+listen('history-changed', () => current === 'home' && renderHomeLive());
 listen('toast', (e) => toast(e.payload.title, e.payload.body));
 listen('shortcut-errors', (e) => e.payload.forEach((m) => toast('Shortcut problem', m, true)));
 listen('trigger-paused', (e) => setStatus(e.payload));
@@ -104,25 +104,10 @@ async function renderHome() {
       ${tool('clipboard', 'Clipboard', 'clipboard', sc.clipboard)}
     </div>
     <div class="hint">Launcher ${kbd(sc.launcher)} and workflows are one shortcut away, or search them in the box above.</div>
-    <h2>Activity</h2>
-    <div class="stats">
-      <div class="stat"><span>Today</span><b>${stats.today}</b></div>
-      <div class="stat"><span>This week</span><b>${stats.week}</b></div>
-      <div class="stat"><span>All time</span><b>${stats.total}</b></div>
-      <div class="stat"><span>Words written</span><b>${Number(stats.words).toLocaleString()}</b></div>
-    </div>
-    <div class="section-head"><h2>Recent</h2><span class="spacer"></span>
-      ${history.length ? `<button class="btn ghost sm" id="clearRecent">Clear</button><button class="btn sm" id="undoBtn" title="Undo last change in your app">${icon('undo', 13)} Undo last change</button>` : ''}</div>
-    <div class="${history.length ? 'recent' : ''}">${history.length ? history.map((i) => `
-      <div class="recent-item"><span class="badge">${esc(i.action)}</span>
-        <span class="r-text" title="${esc(i.result)}">${esc(i.result)}</span>
-        <span class="faint small">${timeAgo(i.time)}</span>
-        <button class="btn ghost icon sm" data-copy="${esc(i.result)}" title="Copy">${icon('copy', 14)}</button></div>`).join('') : '<div class="empty">Nothing yet. Your last 20 AI changes appear here.</div>'}</div>`;
+    <div id="homeLive"></div>`;
   $('#goKey')?.addEventListener('click', () => show('provider'));
   $$('.tool', el).forEach((t) => (t.onclick = () => invoke('open_tool_cmd', { tool: t.dataset.tool })));
-  $$('[data-copy]', el).forEach((b) => (b.onclick = async () => { await invoke('copy_text', { text: b.dataset.copy }); toast('Copied'); }));
-  $('#clearRecent')?.addEventListener('click', async () => { await invoke('clear_history'); renderHome(); });
-  $('#undoBtn')?.addEventListener('click', () => invoke('undo'));
+  renderHomeLive();
   const sample = $('#sample');
   $('#tryReset').onclick = () => (sample.textContent = 'hey can u send me the report when you get a chance');
   $('#tryFix').onclick = async () => {
@@ -151,6 +136,31 @@ async function renderHome() {
   $('#cmdRun').onclick = run;
   $('#cmd').onkeydown = (e) => e.key === 'Enter' && run();
 }
+// Activity + Recent: refreshed on its own after each AI job, so the rest of Home (your test text,
+// the command box answer) is never wiped.
+async function renderHomeLive() {
+  const box = $('#homeLive');
+  if (!box) return;
+  const [stats, history] = await Promise.all([invoke('get_stats'), invoke('get_history')]);
+  box.innerHTML = `
+    <h2>Activity</h2>
+    <div class="stats">
+      <div class="stat"><span>Today</span><b>${stats.today}</b></div>
+      <div class="stat"><span>This week</span><b>${stats.week}</b></div>
+      <div class="stat"><span>All time</span><b>${stats.total}</b></div>
+      <div class="stat"><span>Words written</span><b>${Number(stats.words).toLocaleString()}</b></div>
+    </div>
+    <div class="section-head"><h2>Recent</h2><span class="spacer"></span>
+      ${history.length ? `<button class="btn ghost sm" id="clearRecent">Clear</button><button class="btn sm" id="undoBtn" title="Undo last change in your app">${icon('undo', 13)} Undo last change</button>` : ''}</div>
+    <div class="${history.length ? 'recent' : ''}">${history.length ? history.map((i) => `
+      <div class="recent-item"><span class="badge">${esc(i.action)}</span>
+        <span class="r-text" title="${esc(i.result)}">${esc(i.result)}</span>
+        <span class="faint small">${timeAgo(i.time)}</span>
+        <button class="btn ghost icon sm" data-copy="${esc(i.result)}" title="Copy">${icon('copy', 14)}</button></div>`).join('') : '<div class="empty">Nothing yet. Your last 20 AI changes appear here.</div>'}</div>`;
+  $$('[data-copy]', box).forEach((b) => (b.onclick = async () => { await invoke('copy_text', { text: b.dataset.copy }); toast('Copied'); }));
+  $('#clearRecent')?.addEventListener('click', async () => { await invoke('clear_history'); renderHomeLive(); });
+  $('#undoBtn')?.addEventListener('click', () => invoke('undo'));
+}
 const tool = (ico, name, id, key) => `<div class="tool" data-tool="${id}"><span class="t-ico">${icon(ico, 18)}</span><b>${name}</b><span class="t-key">${kbd(key)}</span></div>`;
 
 // ============================================================ FLOWS (workflows)
@@ -158,7 +168,7 @@ async function renderFlows(editing = null) {
   const el = $('#view-flows');
   if (editing) return renderWorkflowEditor(el, editing);
   const yours = S.workflows.filter((w) => !w.builtin), builtIn = S.workflows.filter((w) => w.builtin);
-  const card = (w) => `<div class="wf-card"><div class="w-ico">${WF_ICON[w.id] ? icon(WF_ICON[w.id], 19) : esc(w.icon || '⛓')}</div>
+  const card = (w) => `<div class="wf-card"><div class="w-ico">${WF_ICON[w.id] ? icon(WF_ICON[w.id], 19) : !w.icon || w.icon === '⛓' ? icon('flows', 19) : esc(w.icon)}</div>
     <div class="grow"><b>${esc(w.name)}</b><div class="muted small">${esc(w.description || '')}</div>
       <div class="wf-steps">${w.steps.map((s) => `<span class="st">${esc(s.output_label || s.mode)}</span>`).join(icon('chevronRight', 12))}</div></div>
     <div class="row"><button class="btn ghost icon sm" data-edit="${w.id}" title="${w.builtin ? 'Duplicate and edit' : 'Edit'}">${icon('edit', 14)}</button>${w.builtin ? '' : `<button class="btn ghost icon sm danger" data-del="${w.id}" title="Delete">${icon('trash', 14)}</button>`}

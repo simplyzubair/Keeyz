@@ -91,7 +91,8 @@ function draw() {
   });
   $('[data-i].active', list)?.scrollIntoView({ block: 'nearest' });
 }
-const rowIcon = (it) => it.a ? actIcon(it.a) : it.ic ? icon(it.ic) : `<span class="emo">${esc(it.emo || '•')}</span>`;
+const WF_ICON = { meeting_notes: 'fileText', email_responder: 'mail', translate_polish: 'globe' };
+const rowIcon = (it) => it.a ? actIcon(it.a) : it.ic ? icon(it.ic) : it.kind === 'workflow' && WF_ICON[it.id] ? icon(WF_ICON[it.id]) : `<span class="emo">${esc(it.emo || '•')}</span>`;
 const rows = (arr, offset = 0) => arr.map((it, i) => `<div class="item" data-i="${i + offset}"><span class="ico">${rowIcon(it)}</span><span class="name">${esc(it.name)}</span><span class="meta">${it.fav ? icon('star', 12) : ''}${esc(it.meta || '')}<kbd class="enter">↵</kbd></span></div>`).join('');
 
 function enter() {
@@ -112,6 +113,7 @@ function enter() {
 
 document.addEventListener('keydown', (e) => {
   if (!$('#result').classList.contains('hidden')) {
+    if (e.key === 'Escape' && document.activeElement !== $('#refine')) { e.preventDefault(); return showPick(); }
     if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); $('#insert').click(); }
     if (e.key === 'Backspace' && document.activeElement === document.body) showPick();
     return;
@@ -126,6 +128,12 @@ document.addEventListener('keydown', (e) => {
 });
 
 function showPick() {
+  // always come back to the main action list (not the language or workflow list)
+  mode = 'actions';
+  running = false;
+  reqId++;
+  q.value = '';
+  q.placeholder = 'Search actions or describe a change…';
   $$('.pick-only').forEach((x) => x.classList.remove('hidden'));
   $$('.res-only').forEach((x) => x.classList.add('hidden'));
   $('#pick').classList.remove('hidden');
@@ -136,9 +144,10 @@ function showPick() {
 
 // ------------------------------------------------------------------ run + result
 let streamBuf = '';
+let reqId = 0; // id of the newest request; pieces of older answers are ignored
 listen('ai-delta', (e) => {
-  if (!running) return;
-  streamBuf += e.payload;
+  if (!running || e.payload.req !== reqId) return;
+  streamBuf += e.payload.text;
   $('#out').textContent = streamBuf;
   $('#out').scrollTop = $('#out').scrollHeight;
 });
@@ -163,16 +172,19 @@ async function run(spec, refineInstr = null) {
   $('#insert').textContent = outKind === 'add' ? 'Add to my text' : 'Replace';
   $('#promise').textContent = outKind === 'add' ? 'Adds new text where your cursor is' : 'Replaces the selected text';
   running = true; streamBuf = '';
+  const my = ++reqId;
   try {
     const out = await invoke('run_action', refineInstr
-      ? { action: 'refine', text: original, lang: spec.lang || null, instruction: refineInstr, previous: versions[vi] }
-      : { action: spec.action, text, lang: spec.lang || null, instruction: spec.instruction || null, previous: null });
+      ? { action: spec.action, text: original, lang: spec.lang || null, instruction: spec.instruction || null, previous: versions[vi], refine: refineInstr, req: my }
+      : { action: spec.action, text, lang: spec.lang || null, instruction: spec.instruction || null, previous: null, refine: null, req: my });
+    if (my !== reqId) return; // a newer request started meanwhile – drop this answer
     running = false;
     versions.push(out); vi = versions.length - 1;
     showDiff = ['fix', 'professional', 'friendly', 'shorten', 'simplify'].includes(spec.action) && !refineInstr;
     paint();
     if (!S.output_window && !refineInstr) return insert();
   } catch (e) {
+    if (my !== reqId) return;
     running = false;
     $('#out').innerHTML = `<div class="err"><b>Couldn't do that</b><span class="muted">${esc(e)}</span><div style="margin-top:12px"><button class="btn" id="retry">${icon('refresh', 14)} Try again</button></div></div>`;
     $('#retry').onclick = () => run(spec, refineInstr);
