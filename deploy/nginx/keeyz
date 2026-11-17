@@ -1,0 +1,37 @@
+# Host nginx on Contabo -> static Keeyz website in /opt/keeyz-website
+# Install as /etc/nginx/sites-available/keeyz, symlink into sites-enabled,
+# `nginx -t && systemctl reload nginx`, then
+# `certbot --nginx -d keeyz.skillsgeek.com` (adds HTTPS + HTTP->HTTPS redirect).
+# DNS: A record keeyz -> 84.247.146.85, "DNS only" in Cloudflare.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name keeyz.skillsgeek.com;
+
+    root /opt/keeyz-website;
+    index index.html;
+
+    gzip on;
+    gzip_types text/plain text/css application/javascript image/svg+xml;
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    # one-line installer: serve as plain text so `irm ... | iex` gets the script
+    location = /install.ps1 {
+        default_type text/plain;
+        charset utf-8;
+        add_header Cache-Control "no-cache";
+    }
+
+    # /download -> download.html
+    location / {
+        try_files $uri $uri.html $uri/ =404;
+    }
+
+    location ~* \.(css|js|svg|png|ico)$ {
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+}
