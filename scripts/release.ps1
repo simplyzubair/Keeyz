@@ -20,13 +20,16 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
 }
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) { $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "" }
 
-# 2) version everywhere
-$conf = "src-tauri\tauri.conf.json"
-(Get-Content $conf -Raw) -replace '"version": "[^"]+"', "`"version`": `"$Version`"" | Set-Content $conf -Encoding utf8 -NoNewline
-(Get-Content package.json -Raw) -replace '"version": "[^"]+"', "`"version`": `"$Version`"" | Set-Content package.json -Encoding utf8 -NoNewline
-$cargo = Get-Content src-tauri\Cargo.toml -Raw
-$cargo = [regex]::Replace($cargo, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1)
-Set-Content src-tauri\Cargo.toml $cargo -Encoding utf8 -NoNewline
+# 2) version everywhere (UTF-8 *without* BOM - the build tools can't read a BOM)
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+function Set-Version($path, $pattern, $replacement) {
+  $full = (Resolve-Path $path).Path
+  $text = [IO.File]::ReadAllText($full)
+  [IO.File]::WriteAllText($full, [regex]::Replace($text, $pattern, $replacement, 1), $utf8)
+}
+Set-Version "src-tauri\tauri.conf.json" '"version": "[^"]+"' "`"version`": `"$Version`""
+Set-Version "package.json" '"version": "[^"]+"' "`"version`": `"$Version`""
+Set-Version "src-tauri\Cargo.toml" '(?m)^version = "[^"]+"' "version = `"$Version`""
 
 # 3) build
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
@@ -44,7 +47,7 @@ $latest = [ordered]@{
   platforms = @{ "windows-x86_64" = @{ signature = $sig.Trim(); url = "https://github.com/simplyzubair/Keeyz/releases/download/v$Version/$exe" } }
 }
 $latestPath = Join-Path $dir "latest.json"
-$latest | ConvertTo-Json -Depth 5 | Set-Content $latestPath -Encoding utf8
+[IO.File]::WriteAllText((Join-Path (Get-Location) $latestPath), ($latest | ConvertTo-Json -Depth 5), $utf8)
 
 # 5) commit version bump + publish
 git add -A
