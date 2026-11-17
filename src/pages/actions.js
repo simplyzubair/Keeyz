@@ -104,7 +104,7 @@ function enter() {
   if (it.kind === 'lang') return run({ action: 'translate', lang: it.id });
   if (it.kind === 'workflow') {
     if (!src.value.trim()) return toast('Select some text first');
-    invoke('open_workflow', { id: it.id, text: src.value });
+    invoke('open_workflow', { id: it.id, text: src.value }).catch((e) => toast("Couldn't open the workflow", String(e), true));
     return hide();
   }
   if (it.kind === 'custom') return run({ action: 'custom', instruction: term });

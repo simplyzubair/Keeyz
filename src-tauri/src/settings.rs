@@ -21,6 +21,35 @@ pub struct ActionDef {
     pub edited: bool,
 }
 
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    #[test]
+    fn merges_legacy_defaults_and_models() {
+        for trigger in ["K", "Zkey"] {
+            let mut s = Settings::default();
+            s.trigger_word = trigger.into();
+            s.merge_builtins();
+            assert_eq!(s.trigger_word, "Keeyz");
+        }
+        let mut s = Settings::default();
+        s.actions.clear();
+        s.merge_builtins();
+        for action in crate::prompts::builtin_actions() { assert!(s.actions.iter().any(|a| a.id == action.id)); }
+        s.run_spaces = 9;
+        s.merge_builtins();
+        assert_eq!(s.run_spaces, 2);
+
+        let mut s = Settings::default();
+        s.provider = "openai".into();
+        let models = s.models.clone();
+        s.custom_model = "gen-lang-client-123".into();
+        s.merge_builtins();
+        assert!(s.custom_model.is_empty());
+        assert_eq!(s.models, models);
+    }
+}
+
 impl Default for ActionDef {
     fn default() -> Self {
         Self {

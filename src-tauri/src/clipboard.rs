@@ -18,6 +18,17 @@ pub fn begin_own() {
     BUSY.fetch_add(1, Ordering::SeqCst);
 }
 
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn looks_secret_examples() {
+        for value in ["sk-proj-AbCdEf0123456789abcdefGHIJ", "sk-or-v1-0123456789abcdef0123456789abcdef", "AIzaSyA1B2C3D4E5F6G7H8I9J0KLMNOPQRSTU", "AQ.Ab8RN6LTCK2S0FtB3VIEgKCmqzlmc1igX6", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc", "Xk9vQ2mL8pR4tY7wZ1nB5cD3fG6hJ0kA"] { assert!(looks_secret(value), "{value}"); }
+        for value in ["hello world", "Hey, can you send me the report?", "https://github.com/simplyzubair/Keeyz", r"C:\Users\zubai\Documents\notes.txt", "zubair@example.com", "1234567890", "short"] { assert!(!looks_secret(value), "{value}"); }
+    }
+}
+
 pub fn end_own() {
     IGNORE_UNTIL.store(crate::winutil::clip_seq(), Ordering::SeqCst);
     BUSY.fetch_sub(1, Ordering::SeqCst);

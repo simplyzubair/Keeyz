@@ -289,6 +289,7 @@ pub fn run() {
             commands::rerun_step,
             commands::get_workflow_run,
             commands::open_workflow,
+            commands::take_workflow_start,
             commands::export_markdown,
             commands::clip_list,
             commands::clip_remove,

@@ -31,11 +31,16 @@
     document.querySelectorAll('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon, 15)));
     await boot({ popup: true });
     let run = null;
-    listen('workflow-start', async (e) => {
-      run = { workflow: { name: '…', steps: [] }, results: [], original: e.payload.text, status: 'running' };
+    // take the waiting job (exactly once) – repeated or late start pings do nothing
+    async function startPending() {
+      const job = await invoke('take_workflow_start');
+      if (!job) return;
+      run = { workflow: { name: '…', steps: [] }, results: [], original: job.text, status: 'running' };
       draw();
-      try { await invoke('run_workflow', { id: e.payload.id, text: e.payload.text }); } catch (err) { toast("Couldn't run workflow", String(err), true); }
-    });
+      try { await invoke('run_workflow', { id: job.id, text: job.text }); } catch (err) { toast("Couldn't run workflow", String(err), true); }
+    }
+    listen('workflow-start', startPending);
+    startPending();
     listen('workflow-progress', (e) => { run = e.payload; draw(); });
     const last = () => run?.results?.[run.results.length - 1]?.text || '';
     function draw() {

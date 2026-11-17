@@ -244,8 +244,9 @@ fn on_mouse_up() {
         if crate::windows_mgr::is_own_window(&app, fg) {
             return;
         }
-        let sel = winutil::uia_selection();
-        dbg_log!("[keeyz-debug] mouse-up selection: dragged={dragged} dbl={dbl} found={:?}", sel.as_deref().map(|t| t.chars().take(40).collect::<String>()));
+        let diag = winutil::uia_selection_diag();
+        dbg_log!("[keeyz-debug] mouse-up selection: dragged={dragged} dbl={dbl} result={:?}", diag.as_ref().map(|t| t.chars().take(40).collect::<String>()));
+        let sel = diag.ok();
         if let Some(text) = sel {
             if text.chars().count() >= 2 {
                 crate::windows_mgr::show_toolbar(&app, text, fg, p);
@@ -435,6 +436,8 @@ fn run_ai(app: AppHandle, hwnd: isize, delete: usize, system: String, user: Stri
         if CANCEL.load(Ordering::SeqCst) {
             return done();
         }
+        // let the bubble finish closing before any key is sent, so none get lost
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         match res {
             Ok(out) => {
                 if winutil::foreground() != hwnd {

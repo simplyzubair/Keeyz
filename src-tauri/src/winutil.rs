@@ -214,7 +214,7 @@ fn send_block(inputs: &[INPUT]) {
 pub fn backspaces(n: usize) {
     for _ in 0..n {
         send_block(&[ki(VK_BACK.0, true), ki(VK_BACK.0, false)]);
-        sleep(Duration::from_millis(4));
+        sleep(Duration::from_millis(7));
     }
     sleep(Duration::from_millis(40));
 }
@@ -300,7 +300,8 @@ pub fn paste_text(hwnd: isize, text: &str) {
         }
         ctrl(VK_V);
     });
-    sleep(Duration::from_millis(250));
+    // slow apps read the clipboard a little after Ctrl+V – wait before putting the old content back
+    sleep(Duration::from_millis(600));
     if let Some(o) = old {
         clip_set(&o);
     }
@@ -311,11 +312,22 @@ pub fn paste_text(hwnd: isize, text: &str) {
 
 /// Selected text of the focused control without touching the clipboard.
 pub fn uia_selection() -> Option<String> {
+    uia_selection_diag().ok()
+}
+
+/// Same as `uia_selection`, but says which step failed (for the debug log).
+pub fn uia_selection_diag() -> Result<String, String> {
     use uiautomation::patterns::UITextPattern;
-    let auto = uiautomation::UIAutomation::new().ok()?;
-    let el = auto.get_focused_element().ok()?;
-    let tp: UITextPattern = el.get_pattern().ok()?;
-    let ranges = tp.get_selection().ok()?;
+    let auto = uiautomation::UIAutomation::new().map_err(|e| format!("init: {e}"))?;
+    let el = auto.get_focused_element().map_err(|e| format!("focused element: {e}"))?;
+    let info = format!(
+        "{} / {:?} / class {}",
+        el.get_name().unwrap_or_default(),
+        el.get_control_type().map(|c| format!("{c:?}")).unwrap_or_default(),
+        el.get_classname().unwrap_or_default()
+    );
+    let tp: UITextPattern = el.get_pattern().map_err(|e| format!("no text pattern on [{info}]: {e}"))?;
+    let ranges = tp.get_selection().map_err(|e| format!("get selection on [{info}]: {e}"))?;
     let mut out = String::new();
     for r in ranges {
         if let Ok(t) = r.get_text(-1) {
@@ -323,7 +335,7 @@ pub fn uia_selection() -> Option<String> {
         }
     }
     let t = out.trim().to_string();
-    (!t.is_empty()).then_some(t)
+    if t.is_empty() { Err(format!("empty selection on [{info}]")) } else { Ok(t) }
 }
 
 /// Whole text of the focused document (used by "Summarize page").

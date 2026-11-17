@@ -214,7 +214,7 @@ pub async fn run_action(
             (prompts::trigger_system(&s), format!("TEXT:\n<<<\n{text}\n>>>\n\nINSTRUCTION: {instr}"), "custom".to_string())
         }
     } else if action == "summarize_page" {
-        (prompts::system_for(&s, prompts::SUMMARIZE_PAGE, false), text.clone(), action.clone())
+        (prompts::system_for(&s, prompts::SUMMARIZE_PAGE, false), prompts::wrap_text(&text), action.clone())
     } else {
         let a = s.action(&action).ok_or("Unknown action")?;
         let faithful = a.id == "fix" || a.id == "translate";
@@ -222,7 +222,7 @@ pub async fn run_action(
         if a.id != "translate" {
             sys.push_str(&prompts::language_rule(&text));
         }
-        (sys, text.clone(), a.id)
+        (sys, prompts::wrap_text(&text), a.id)
     };
     // Refine an earlier result (Shorter, Longer, "add a greeting"…): keep the conversation,
     // so the AI changes its last answer instead of starting over.
@@ -438,12 +438,23 @@ async fn run_step(s: &Settings, step: &crate::settings::WorkflowStep, original: 
         }
         t
     };
-    ai::ask(s, &prompts::system_for(s, &task, false), &input).await.map_err(e)
+    ai::ask(s, &prompts::system_for(s, &task, false), &prompts::wrap_text(&input)).await.map_err(e)
 }
 
 /// Runs a workflow and streams progress to the workflow window.
 #[tauri::command]
 pub async fn run_workflow(app: AppHandle, st: State<'_, AppState>, id: String, text: String) -> R<Value> {
+    // only one workflow at a time: a second run would overwrite the first one's results
+    if WF_RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("A workflow is still running. Wait for it to finish, then try again.".into());
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            WF_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _done = Done;
     let s = st.settings();
     let wf = s.workflows.iter().find(|w| w.id == id).cloned().ok_or("Workflow not found")?;
     let mut run = json!({"workflow": wf, "original": text, "results": [], "status": "running"});
@@ -478,6 +489,9 @@ pub async fn run_workflow(app: AppHandle, st: State<'_, AppState>, id: String, t
 
 #[tauri::command]
 pub async fn rerun_step(app: AppHandle, st: State<'_, AppState>, index: usize) -> R<Value> {
+    if WF_RUNNING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Wait until the workflow has finished, then re-run a step.".into());
+    }
     let s = st.settings();
     let mut run = st.workflow_run.lock().unwrap().clone();
     let wf: Workflow = serde_json::from_value(run["workflow"].clone()).map_err(e)?;
@@ -500,15 +514,27 @@ pub fn get_workflow_run(st: State<AppState>) -> Value {
     st.workflow_run.lock().unwrap().clone()
 }
 
+static WF_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The workflow the results window should run next. The window takes it exactly once,
+/// so a late or repeated "workflow-start" ping can never start an old job.
+static WF_PENDING: once_cell::sync::Lazy<std::sync::Mutex<Option<(String, String)>>> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
 pub fn show_workflow(app: &AppHandle, id: String, text: String) {
+    *WF_PENDING.lock().unwrap() = Some((id, text));
     if let Some(w) = wm::show(app, &wm::WORKFLOW, Place::Center) {
-        // give a freshly created window a moment to load before it gets the start event
+        let _ = w.emit("workflow-start", ());
+        // a freshly created window may not listen yet; it also asks on load
         let w2 = w.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(500));
-            let _ = w2.emit("workflow-start", json!({"id": id, "text": text}));
+            std::thread::sleep(Duration::from_millis(600));
+            let _ = w2.emit("workflow-start", ());
         });
     }
+}
+
+#[tauri::command]
+pub fn take_workflow_start() -> Option<Value> {
+    WF_PENDING.lock().unwrap().take().map(|(id, text)| json!({"id": id, "text": text}))
 }
 
 #[tauri::command]

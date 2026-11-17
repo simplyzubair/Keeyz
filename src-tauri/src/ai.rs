@@ -114,6 +114,9 @@ fn friendly_status(provider: &str, status: u16, body: &str) -> anyhow::Error {
         };
         return anyhow!("Your key works, but its spending limit is used up ($0 left).{fix}");
     }
+    if status == 429 && (low.contains("per-day") || low.contains("per day") || low.contains("perday")) {
+        return anyhow!("{name}'s free daily limit is used up. It resets tomorrow – or add credit to your {name} account for more.");
+    }
     if status == 429 && provider == "openrouter" && low.contains("rate-limited upstream") {
         return anyhow!("This free model is busy right now. Try again in a minute, or pick another model. ({short})");
     }
@@ -371,6 +374,13 @@ fn gemini_config(model: &str, max_tokens: u32) -> Value {
 pub fn clean_output(s: &str) -> String {
     let re = regex::Regex::new(r"(?s)<think>.*?</think>").unwrap();
     let mut t = re.replace_all(s, "").trim().to_string();
+    // models sometimes echo the <<< >>> markers that wrap the user's text
+    if let Some(rest) = t.strip_prefix("<<<") {
+        t = rest.trim_start().to_string();
+    }
+    if let Some(rest) = t.strip_suffix(">>>") {
+        t = rest.trim_end().to_string();
+    }
     if t.starts_with("```") && t.ends_with("```") && t.len() > 6 {
         let inner = &t[3..t.len() - 3];
         let inner = inner.split_once('\n').map(|(first, rest)| if first.trim().chars().all(|c| c.is_alphanumeric()) { rest } else { inner }).unwrap_or(inner);
@@ -394,6 +404,17 @@ pub async fn test_connection(settings: &Settings) -> Result<String> {
     let r = ask(settings, "Reply with the single word: OK", "ping").await?;
     let who = if settings.provider == "auto" { crate::fast::LAST_USED.lock().unwrap().clone() } else { settings.model() };
     Ok(format!("Connected ({}): {}", who, r.chars().take(40).collect::<String>()))
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    #[test]
+    fn cleans_output() {
+        assert_eq!(clean_output("<think>x</think>Hello"), "Hello");
+        assert_eq!(clean_output("```\nHello\n```"), "Hello");
+        assert_eq!(clean_output("plain"), "plain");
+    }
 }
 
 pub async fn list_models(settings: &Settings) -> Result<Vec<String>> {

@@ -62,7 +62,7 @@
     function reset() { $('#bar').classList.remove('hidden'); $('#panel').classList.add('hidden'); size(BAR); }
     $$('#bar button').forEach((b) => (b.onclick = () => {
       const a = b.dataset.a;
-      if (a === 'more') { win.hide(); return invoke('open_actions_with', { text, source: 'toolbar', action: null }); }
+      if (a === 'more') { win.hide(); return selectedText().then((t) => invoke('open_actions_with', { text: t, source: 'toolbar', action: null })); }
       if (a === 'translate') return pickLang();
       run(a);
     }));
@@ -70,7 +70,8 @@
       $('#bar').classList.add('hidden'); $('#panel').classList.remove('hidden'); size(PANEL);
       $('#pTitle').textContent = title; $('#pChanges').textContent = '';
     }
-    function pickLang() {
+    async function pickLang() {
+      await selectedText();
       openPanel('Translate to');
       $('#pFoot').classList.add('hidden');
       const fav = [S.default_translate_lang, 'English', 'Spanish', 'French', 'German', 'Urdu', 'Arabic'];
@@ -80,8 +81,16 @@
       $$('[data-l]').forEach((d) => (d.onclick = () => run('translate', d.dataset.l)));
       win.setFocus(); $('#lq').focus();
     }
+    // The selected text is kept by Keeyz; ask for it, so a first-time toolbar (which may have
+    // missed the show event while loading) still works.
+    async function selectedText() {
+      try { const c = await invoke('get_capture'); if (c?.text) text = c.text; } catch {}
+      return text;
+    }
     async function run(action, lang = '') {
       current = { action, lang };
+      await selectedText();
+      if (!text.trim()) { $('#pBody') && openPanel('Nothing selected'); return; }
       const name = S.actions.find((a) => a.id === action)?.name || action;
       openPanel(lang ? `Translate to ${lang}` : name);
       $('#pFoot').classList.remove('hidden');

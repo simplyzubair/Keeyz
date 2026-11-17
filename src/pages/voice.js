@@ -59,6 +59,18 @@ async function start(keep) {
     toast("The microphone can't be opened", 'Allow microphone access in Windows Settings → Privacy → Microphone, or pick another microphone in Settings.', true);
     return;
   }
+  try {
+    setupRecorder();
+  } catch (e) {
+    stream?.getTracks().forEach((t) => t.stop());
+    view('review');
+    $('#state').textContent = 'Microphone problem';
+    $('#text').value = prefix;
+    toast("The microphone can't be used right now", String(e), true);
+  }
+}
+
+function setupRecorder() {
   const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
   rec = new MediaRecorder(stream, { mimeType: mime });
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
@@ -139,8 +151,16 @@ async function insert(polish) {
     try { text = await invoke('voice_polish', { text }); } catch (e) { toast('Polish failed, pasting as heard', String(e)); }
   }
   mode = 'idle';
-  await invoke('paste_into_last', { text });
-  sound('done');
+  try {
+    await invoke('paste_into_last', { text });
+    sound('done');
+  } catch (e) {
+    // keep the words so nothing is lost
+    view('review');
+    $('#text').value = text;
+    $('#state').textContent = "Couldn't paste";
+    toast("Couldn't paste", 'Your text is still here – copy it or try Insert again.', true);
+  }
 }
 
 async function cancel() {
