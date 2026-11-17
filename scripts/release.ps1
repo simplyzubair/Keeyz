@@ -53,5 +53,8 @@ $latestPath = Join-Path $dir "latest.json"
 git add -A
 git commit -m "release: v$Version" | Out-Null
 git push origin main
-gh release create "v$Version" (Join-Path $dir $exe) (Join-Path $dir "$exe.sig") $latestPath --title "Keeyz v$Version" --notes $Notes
+# Keeyz-setup.exe = same installer under a fixed name, so the website's download link never changes.
+$stable = Join-Path $env:TEMP "Keeyz-setup.exe"
+Copy-Item (Join-Path $dir $exe) $stable -Force
+gh release create "v$Version" (Join-Path $dir $exe) (Join-Path $dir "$exe.sig") $latestPath $stable --title "Keeyz v$Version" --notes $Notes
 Write-Host "Published v$Version. Installed apps will offer the update."
