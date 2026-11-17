@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Voice</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    .rec { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+    .mic { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--ink); color: var(--ink-text); flex: none; }
+    .mic.live { animation: ring 1.4s infinite; }
+    @keyframes ring { 0% { box-shadow: 0 0 0 0 var(--accent-ring); } 100% { box-shadow: 0 0 0 12px transparent; } }
+    .bars { display: flex; gap: 3px; align-items: center; height: 34px; flex: 1; }
+    .bars i { flex: 1; background: var(--text-3); border-radius: 3px; height: 4px; transition: height .08s; }
+    #text { margin: 12px 14px 0; width: auto; min-height: 76px; max-height: 120px; font-size: 14px; }
+    .acts { display: flex; gap: 6px; padding: 10px 14px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="popup">
+    <div class="popup-head" data-tauri-drag-region>
+      <img class="logo" src="./lib/logo.svg" alt="" /><b id="state" data-tauri-drag-region>Listening…</b><span class="faint small" id="timer" data-tauri-drag-region></span>
+      <span class="spacer" data-tauri-drag-region></span>
+      <select class="input" id="lang" style="width:150px;height:28px;padding:2px 6px" title="Dictation language"></select>
+      <button class="btn ghost icon sm" id="close" title="Close without pasting (Esc)" data-icon="x"></button>
+    </div>
+    <div class="rec" id="recView"><div class="mic live" id="mic" data-icon="mic"></div><div class="bars" id="bars"></div>
+      <button class="btn primary" id="done" title="Finish dictating"><span data-icon="check"></span>Done</button></div>
+    <div id="review" class="hidden" style="flex:1;display:flex;flex-direction:column">
+      <textarea class="input" id="text" placeholder="Your words appear here…"></textarea>
+      <div class="acts">
+        <button class="btn primary" id="ins" title="Polish grammar & punctuation, then paste (Enter)">Insert</button>
+        <button class="btn" id="raw" title="Paste exactly as transcribed (Tab)">Insert as heard</button>
+        <button class="btn" id="cont" title="Keep dictating. Appends to the text you already have">Continue</button>
+        <button class="btn" id="qa" title="Open Quick Actions to translate, summarize, or write a custom instruction">Quick Actions</button>
+        <span class="spacer"></span><button class="btn ghost danger" id="discard">Discard</button>
+      </div>
+    </div>
+    <div class="popup-foot" id="foot"><span><kbd>Enter</kbd> Stop &amp; insert</span><span><kbd>Tab</kbd> Raw</span><span><kbd>Esc</kbd> Discard</span><span class="spacer"></span><span id="hint">Speak naturally</span></div>
+  </div>
+  <script type="module" src="./voice.js"></script>
+</body>
+</html>

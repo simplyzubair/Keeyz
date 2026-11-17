@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Clipboard</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    #list { flex: 1; padding: 4px 8px; }
+    .clip { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border-radius: 10px; cursor: pointer; transition: background .1s; }
+    .clip:hover { background: var(--bg-hover); }
+    .clip.active { background: var(--bg-active); }
+    .clip .num { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; color: var(--text-3); font-size: 11px; font-weight: 600; background: var(--bg-2); border: 1px solid var(--line); flex: none; }
+    .clip .num:empty { visibility: hidden; }
+    .clip .txt { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; word-break: break-word; font-size: .93em; }
+    .clip img { max-width: 160px; max-height: 90px; border-radius: 6px; border: 1px solid var(--line); }
+    .clip .tools { display: flex; gap: 2px; opacity: 0; }
+    .clip:hover .tools, .clip.active .tools { opacity: 1; }
+    .pin.on { color: var(--star); }
+    .search-wrap { display: flex; align-items: center; gap: 8px; margin: 10px 12px 4px; padding: 0 12px; height: 40px; border: 1px solid var(--line-2); border-radius: 11px; }
+    .search-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+    .search-wrap svg { color: var(--text-3); }
+    .search-wrap input { flex: 1; border: 0; outline: none; background: transparent; }
+  </style>
+</head>
+<body>
+  <div class="popup">
+    <div class="popup-head" data-tauri-drag-region>
+      <img class="logo" src="./lib/logo.svg" alt="" /><b data-tauri-drag-region>Clipboard</b><span class="spacer" data-tauri-drag-region></span>
+      <button class="btn ghost sm" id="clear">Clear all</button><button class="btn ghost icon sm" id="close" data-icon="x"></button>
+    </div>
+    <div class="search-wrap"><span data-icon="search"></span><input id="q" placeholder="Search clipboard…" autocomplete="off" /></div>
+    <div id="list" class="scroll"></div>
+    <div class="popup-foot"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Paste</span><span><kbd>1-9</kbd> Quick paste</span><span class="spacer"></span><span><kbd>Esc</kbd> Close</span></div>
+  </div>
+  <script type="module">
+    import { boot, invoke, listen, win, $, $$, esc, toast, hide, timeAgo } from './lib/core.js';
+    import { icon } from './lib/icons.js';
+    document.querySelectorAll('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon, 15)));
+    await boot({ popup: true, hideOnBlur: true });
+    let all = [], shown = [], sel = 0;
+    const q = $('#q');
+    $('#close').onclick = hide;
+    $('#clear').onclick = async () => { if (confirm('Clear all clipboard history? Pinned items stay.')) { await invoke('clip_clear'); load(); } };
+    listen('clipboard-changed', load);
+    win.onFocusChanged(({ payload }) => payload && (q.value = '', sel = 0, load(), q.focus()));
+    load();
+    async function load() { all = await invoke('clip_list'); draw(); }
+    function draw() {
+      const t = q.value.toLowerCase();
+      const f = all.filter((c) => !t || c.text.toLowerCase().includes(t));
+      const pinned = f.filter((c) => c.pinned), recent = f.filter((c) => !c.pinned);
+      shown = [...pinned, ...recent];
+      const row = (c, i) => `<div class="clip" data-i="${i}"><span class="num">${i < 9 ? i + 1 : ''}</span>
+        ${c.kind === 'image' ? `<div class="grow"><img src="${c.thumb}" /><div class="faint small">${esc(c.text)}</div></div>` : `<div class="txt">${esc(c.text)}</div>`}
+        <div class="tools">
+          <button class="btn ghost icon sm pin ${c.pinned ? 'on' : ''}" data-pin="${c.id}" title="Pin">${icon('pin', 14)}</button>
+          ${c.kind === 'image' ? `<button class="btn ghost icon sm" data-ocr="${c.id}" title="Read text in image">${icon('scan', 14)}</button>` : `<button class="btn ghost icon sm" data-ai="${i}" title="Open in Quick Actions">${icon('sparkles', 14)}</button>`}
+          <button class="btn ghost icon sm" data-copy="${i}" title="Copy">${icon('copy', 14)}</button>
+          <button class="btn ghost icon sm" data-rm="${c.id}" title="Remove">${icon('trash', 14)}</button>
+        </div><span class="faint small" style="white-space:nowrap">${timeAgo(c.time)}</span></div>`;
+      $('#list').innerHTML = (pinned.length ? `<div class="group-label">Pinned</div>${pinned.map((c, i) => row(c, i)).join('')}` : '')
+        + (recent.length ? `<div class="group-label">Recent</div>${recent.map((c, i) => row(c, i + pinned.length)).join('')}` : '')
+        || `<div style="text-align:center;padding:48px 20px;color:var(--text-3)">${icon('clipboard', 28)}<div style="margin-top:10px">Nothing copied yet.<br>Copy something and it shows up here.</div></div>`;
+      sel = Math.min(sel, Math.max(0, shown.length - 1));
+      $$('.clip').forEach((r) => { r.classList.toggle('active', +r.dataset.i === sel); r.onclick = (e) => { if (!e.target.closest('button')) paste(+r.dataset.i); }; });
+      $$('[data-pin]').forEach((b) => (b.onclick = async () => { await invoke('clip_pin', { id: b.dataset.pin }); load(); }));
+      $$('[data-rm]').forEach((b) => (b.onclick = async () => { await invoke('clip_remove', { id: b.dataset.rm }); load(); }));
+      $$('[data-copy]').forEach((b) => (b.onclick = async () => { await invoke('copy_text', { text: shown[+b.dataset.copy].text }); toast('Copied'); }));
+      $$('[data-ai]').forEach((b) => (b.onclick = async () => { await hide(); invoke('open_actions_with', { text: shown[+b.dataset.ai].text, source: 'clipboard', action: null }); }));
+      $$('[data-ocr]').forEach((b) => (b.onclick = async () => {
+        try { const text = await invoke('clip_ocr', { id: b.dataset.ocr }); await hide(); invoke('open_actions_with', { text, source: 'ocr', action: null }); }
+        catch (e) { toast('No readable text found', String(e), true); }
+      }));
+      $('.clip.active')?.scrollIntoView({ block: 'nearest' });
+    }
+    const paste = (i) => shown[i] && invoke('clip_paste', { id: shown[i].id });
+    q.oninput = () => { sel = 0; draw(); };
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, shown.length - 1); draw(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); draw(); }
+      else if (e.key === 'Enter') { e.preventDefault(); paste(sel); }
+      else if (/^[1-9]$/.test(e.key) && (document.activeElement !== q || !q.value)) { e.preventDefault(); paste(+e.key - 1); }
+    });
+  </script>
+</body>
+</html>

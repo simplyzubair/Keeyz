@@ -1,0 +1,10 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.env*
+!.env.example
+research/
+
+# built installers go to GitHub Releases, not git
+release/

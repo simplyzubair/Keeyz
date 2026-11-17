@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Workflow</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    #body { flex: 1; padding: 14px 16px; }
+    .step { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; overflow: hidden; animation: tin .2s var(--ease); }
+    .step .s-head { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--bg-2); }
+    .step .s-body { padding: 12px 14px; font-size: 13.5px; }
+    .step.final { border-color: var(--line-2); }
+    .n { width: 22px; height: 22px; border-radius: 7px; background: var(--bg-3); display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--text-2); }
+    .step.final .n { background: var(--ink); color: var(--ink-text); }
+    details summary { cursor: pointer; color: var(--text-2); margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="popup">
+    <div class="popup-head" data-tauri-drag-region>
+      <img class="logo" src="./lib/logo.svg" alt="" /><b id="title" data-tauri-drag-region>Workflow</b><span class="faint small" id="prog" data-tauri-drag-region></span>
+      <span class="spacer" data-tauri-drag-region></span>
+      <button class="btn ghost sm" id="md">Export .md</button><button class="btn ghost sm" id="all">Copy all</button><button class="btn ghost icon sm" id="close" data-icon="x"></button>
+    </div>
+    <div id="body" class="scroll"></div>
+    <div class="popup-foot"><button class="btn primary sm" id="paste">Paste result</button><button class="btn sm" id="copy">Copy result</button><span class="spacer"></span><span><kbd>Esc</kbd> Close</span></div>
+  </div>
+  <script type="module">
+    import { boot, invoke, listen, $, $$, esc, toast, hide } from './lib/core.js';
+    import { icon } from './lib/icons.js';
+    document.querySelectorAll('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon, 15)));
+    await boot({ popup: true });
+    let run = null;
+    listen('workflow-start', async (e) => {
+      run = { workflow: { name: '…', steps: [] }, results: [], original: e.payload.text, status: 'running' };
+      draw();
+      try { await invoke('run_workflow', { id: e.payload.id, text: e.payload.text }); } catch (err) { toast("Couldn't run workflow", String(err), true); }
+    });
+    listen('workflow-progress', (e) => { run = e.payload; draw(); });
+    const last = () => run?.results?.[run.results.length - 1]?.text || '';
+    function draw() {
+      if (!run) return;
+      const steps = run.workflow.steps || [];
+      $('#title').textContent = `${run.workflow.icon || '⛓'} ${run.workflow.name}`;
+      $('#prog').textContent = run.status === 'running' ? `Running workflow… step ${run.results.length + 1} of ${steps.length}` : run.status === 'error' ? 'stopped early' : `${steps.length} steps done`;
+      $('#body').innerHTML = `<details><summary>Your text (${run.original.length} characters)</summary><div class="result-text faint">${esc(run.original)}</div></details>`
+        + steps.map((s, i) => {
+          const r = run.results[i];
+          const isFinal = i === steps.length - 1 && r;
+          return `<div class="step ${isFinal ? 'final' : ''}"><div class="s-head"><span class="n">${i + 1}</span><b>${esc(s.output_label || s.mode)}</b>${isFinal ? '<span class="badge">result</span>' : ''}<span class="spacer"></span>
+            ${r ? `<button class="btn ghost sm" data-rerun="${i}">Re-run</button><button class="btn ghost sm" data-cp="${i}">Copy</button>` : run.status === 'running' && i === run.results.length ? '<div class="spinner"></div>' : ''}</div>
+            <div class="s-body result-text">${r ? esc(r.text) : '<span class="faint">waiting…</span>'}</div></div>`;
+        }).join('')
+        + (run.error ? `<p style="color:var(--danger)">${esc(run.error)}</p>` : '');
+      $$('[data-cp]').forEach((b) => (b.onclick = async () => { await invoke('copy_text', { text: run.results[+b.dataset.cp].text }); toast('Copied'); }));
+      $$('[data-rerun]').forEach((b) => (b.onclick = async () => { b.textContent = 're-running…'; try { await invoke('rerun_step', { index: +b.dataset.rerun }); } catch (e) { toast('Could not re-run this step. Try again.', String(e), true); } }));
+    }
+    $('#close').onclick = hide;
+    $('#copy').onclick = async () => { await invoke('copy_text', { text: last() }); toast('Copied'); };
+    $('#paste').onclick = () => last() && invoke('paste_into_last', { text: last() });
+    $('#all').onclick = async () => { await invoke('copy_text', { text: run.results.map((r) => `## ${r.label}\n\n${r.text}`).join('\n\n') }); toast('Copied all'); };
+    $('#md').onclick = async () => { try { const f = await invoke('export_markdown'); toast('Saved', f); } catch (e) { toast('Export failed', String(e), true); } };
+  </script>
+</body>
+</html>

@@ -1,0 +1,320 @@
+mod ai;
+mod clipboard;
+mod commands;
+mod fast;
+mod hook;
+mod ocr;
+mod prompts;
+mod settings;
+mod state;
+mod windows_mgr;
+mod winutil;
+
+use once_cell::sync::Lazy;
+use state::AppState;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+/// shortcut id -> our action name
+static SHORTCUT_MAP: Lazy<Mutex<HashMap<u32, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// (Re)register every global shortcut from settings. Returns failures to show in the UI.
+pub fn register_shortcuts(app: &AppHandle) -> Vec<String> {
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let mut map = SHORTCUT_MAP.lock().unwrap();
+    map.clear();
+    let s = app.state::<AppState>().settings();
+    let mut list: Vec<(String, String)> = s.shortcuts.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    list.extend(s.custom_shortcuts.iter().map(|c| (format!("custom:{}", c.id), c.accelerator.clone())));
+    let mut failed = vec![];
+    for (id, accel) in list {
+        if accel.trim().is_empty() {
+            continue;
+        }
+        match accel.parse::<Shortcut>() {
+            Ok(sc) => {
+                if gs.register(sc).is_ok() {
+                    map.insert(sc.id(), id);
+                } else {
+                    failed.push(format!("{accel} is already used by another app. Pick a different combination in Settings → Shortcuts."));
+                }
+            }
+            Err(_) => failed.push(format!("{accel} is not a valid shortcut.")),
+        }
+    }
+    if !failed.is_empty() {
+        let _ = app.emit("shortcut-errors", &failed);
+    }
+    failed
+}
+
+#[tauri::command]
+fn reregister_shortcuts(app: AppHandle) -> Vec<String> {
+    register_shortcuts(&app)
+}
+
+#[tauri::command]
+fn suspend_shortcuts(app: AppHandle, suspend: bool) {
+    // While the user records a new shortcut in Settings.
+    if suspend {
+        let _ = app.global_shortcut().unregister_all();
+    } else {
+        register_shortcuts(&app);
+    }
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "Open Keeyz", true, None::<&str>)?;
+    let pause = CheckMenuItem::with_id(app, "pause", "Pause typed triggers", true, false, None::<&str>)?;
+    let actions = MenuItem::with_id(app, "t_actions", "Quick Actions", true, None::<&str>)?;
+    let launcher = MenuItem::with_id(app, "t_launcher", "Launcher", true, None::<&str>)?;
+    let clip = MenuItem::with_id(app, "t_clipboard", "Clipboard history", true, None::<&str>)?;
+    let voice = MenuItem::with_id(app, "t_voice", "Voice input", true, None::<&str>)?;
+    let ocr = MenuItem::with_id(app, "t_ocr", "Text from screen", true, None::<&str>)?;
+    let help = MenuItem::with_id(app, "help", "How to use", true, None::<&str>)?;
+    let feedback = MenuItem::with_id(app, "feedback", "Send feedback", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let sep = || PredefinedMenuItem::separator(app);
+    let menu = Menu::with_items(
+        app,
+        &[&open, &pause, &sep()?, &actions, &launcher, &clip, &voice, &ocr, &sep()?, &help, &feedback, &update, &sep()?, &quit],
+    )?;
+    let pause2 = pause.clone();
+    TrayIconBuilder::with_id("tray")
+        .icon(app.default_window_icon().cloned().expect("icon"))
+        .tooltip("Keeyz – click to open")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(move |app, ev| match ev.id().as_ref() {
+            "open" => windows_mgr::show_main(app),
+            "pause" => {
+                let p = pause2.is_checked().unwrap_or(false);
+                commands::set_trigger_paused(app.clone(), p);
+            }
+            "t_actions" => commands::open_tool(app.clone(), "actions".into()),
+            "t_launcher" => commands::open_tool(app.clone(), "launcher".into()),
+            "t_clipboard" => commands::open_tool(app.clone(), "clipboard".into()),
+            "t_voice" => commands::open_tool(app.clone(), "voice".into()),
+            "t_ocr" => commands::open_ocr(app),
+            "help" => {
+                windows_mgr::show_main(app);
+                let _ = app.emit("navigate", "help");
+            }
+            "feedback" => {
+                windows_mgr::show_main(app);
+                let _ = app.emit("navigate", "feedback");
+            }
+            "update" => {
+                windows_mgr::show_main(app);
+                let _ = app.emit("navigate", "settings");
+                let _ = app.emit("check-update", ());
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, ev| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
+                windows_mgr::show_main(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+/// First start after a rename: copy settings/history from the newest old data folder (old folders are left as is).
+fn copy_old_data(dir: &std::path::Path) {
+    let Some(parent) = dir.parent() else { return };
+    if dir.join("settings.json").exists() {
+        return;
+    }
+    let Some(old) = ["com.skillsgeek.zkey"]
+        .iter()
+        .map(|n| parent.join(n))
+        .find(|p| p.join("settings.json").exists())
+    else {
+        return;
+    };
+    for f in ["settings.json", "history.json", "stats.json", "clipboard.json", "feedback.md"] {
+        let _ = std::fs::copy(old.join(f), dir.join(f));
+    }
+    if let Ok(entries) = std::fs::read_dir(old.join("clips")) {
+        let _ = std::fs::create_dir_all(dir.join("clips"));
+        for e in entries.flatten() {
+            let _ = std::fs::copy(e.path(), dir.join("clips").join(e.file_name()));
+        }
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            windows_mgr::show_main(app);
+        }))
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, sc, ev| {
+                    if ev.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let id = SHORTCUT_MAP.lock().unwrap().get(&sc.id()).cloned();
+                    if let Some(id) = id {
+                        commands::hotkey(app, &id);
+                    }
+                })
+                .build(),
+        )
+        .setup(|app| {
+            let dir = app.path().app_config_dir().expect("config dir");
+            std::fs::create_dir_all(&dir).ok();
+            copy_old_data(&dir);
+            fast::init(&dir);
+            let st = AppState::new(dir.clone());
+            let first_run = !st.settings().onboarded;
+            let on_top = st.settings().always_on_top;
+            app.manage(st);
+            let store = Arc::new(clipboard::ClipStore::new(&dir));
+            app.manage(store.clone());
+
+            let handle = app.handle().clone();
+            build_tray(&handle)?;
+            register_shortcuts(&handle);
+            clipboard::start_watcher(handle.clone(), store);
+            hook::start(handle.clone());
+            // Look for a new version shortly after start, then every 6 hours.
+            let h3 = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                loop {
+                    if let Ok(v) = commands::find_update(&h3).await {
+                        if v["available"] == true {
+                            let _ = h3.emit("update-available", &v);
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+                }
+            });
+            // Auto mode: keep the "fastest model" list fresh (checks at start, then every 12 hours).
+            let h2 = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    let s = h2.state::<AppState>().settings();
+                    if s.provider == "auto" && fast::stale() {
+                        let _ = fast::benchmark(&s).await;
+                        let _ = h2.emit("fast-updated", fast::snapshot());
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
+                }
+            });
+
+            if first_run {
+                use tauri_plugin_autostart::ManagerExt;
+                let _ = handle.autolaunch().enable();
+            }
+            let hidden = std::env::args().any(|a| a == "--hidden");
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_always_on_top(on_top);
+                if !hidden || first_run {
+                    let _ = w.show();
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|win, ev| {
+            if win.label() != "main" {
+                return;
+            }
+            let app = win.app_handle();
+            let st = app.state::<AppState>();
+            match ev {
+                WindowEvent::CloseRequested { api, .. } => {
+                    let s = st.settings();
+                    if s.close_behavior == "quit" {
+                        app.exit(0);
+                        return;
+                    }
+                    api.prevent_close();
+                    let _ = win.hide();
+                    if !s.tray_notice_shown || s.notify_on_tray {
+                        commands::notify(app, "Keeyz is in the tray", "Your shortcuts keep working. Click the tray icon to open it again.");
+                        st.settings.lock().unwrap().tray_notice_shown = true;
+                        st.save_settings();
+                    }
+                }
+                WindowEvent::Focused(false) => {
+                    if st.settings().hide_on_blur {
+                        let _ = win.hide();
+                    }
+                }
+                _ => {}
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            reregister_shortcuts,
+            suspend_shortcuts,
+            commands::get_settings,
+            commands::save_settings,
+            commands::reset_section,
+            commands::key_status,
+            commands::set_api_key,
+            commands::test_connection,
+            commands::list_models,
+            commands::get_capture,
+            commands::set_capture,
+            commands::open_actions_with,
+            commands::run_action,
+            commands::chat,
+            commands::improve_text,
+            commands::insert_result,
+            commands::copy_text,
+            commands::get_history,
+            commands::clear_history,
+            commands::undo,
+            commands::get_stats,
+            commands::save_action,
+            commands::delete_action,
+            commands::save_workflow,
+            commands::delete_workflow,
+            commands::run_workflow,
+            commands::rerun_step,
+            commands::get_workflow_run,
+            commands::open_workflow,
+            commands::export_markdown,
+            commands::clip_list,
+            commands::clip_remove,
+            commands::clip_pin,
+            commands::clip_clear,
+            commands::clip_paste,
+            commands::clip_ocr,
+            commands::ocr_capture,
+            commands::voice_transcribe,
+            commands::voice_polish,
+            commands::paste_into_last,
+            commands::open_tool_cmd,
+            commands::launcher_action,
+            commands::find_fastest,
+            commands::check_update,
+            commands::install_update,
+            commands::fast_status,
+            commands::hide_me,
+            commands::resize_me,
+            commands::set_trigger_paused,
+            commands::trigger_paused,
+            commands::save_feedback,
+            commands::app_info,
+            commands::delete_everything,
+            commands::quit_app,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Keeyz");
+}

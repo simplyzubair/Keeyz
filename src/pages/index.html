@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Keeyz</title>
+  <link rel="icon" href="./lib/logo.svg" />
+  <link rel="stylesheet" href="./lib/base.css" />
+  <link rel="stylesheet" href="./main.css" />
+</head>
+<body>
+  <div class="app">
+    <nav class="rail" data-tauri-drag-region>
+      <img class="rail-logo" src="./lib/logo.svg" alt="" />
+      <button class="rail-btn active" data-view="home" data-icon="home" title="Home"><small>Home</small></button>
+      <button class="rail-btn" data-view="flows" data-icon="flows" title="Workflows"><small>Flows</small></button>
+      <button class="rail-btn" data-view="ai" data-icon="sparkles" title="Actions and your style"><small>AI</small></button>
+      <button class="rail-btn" data-view="settings" data-icon="settings" title="Settings"><small>Settings</small></button>
+      <div class="spacer" data-tauri-drag-region></div>
+      <button class="rail-btn sq" data-tool="clipboard" data-icon="clipboard" title="Clipboard history"></button>
+      <button class="rail-btn sq" data-view="provider" data-icon="key" title="AI Provider"></button>
+      <button class="rail-btn sq" data-view="help" data-icon="help" title="Help &amp; setup guide"></button>
+      <button class="rail-btn sq" data-view="feedback" data-icon="message" title="Send feedback"></button>
+    </nav>
+
+    <main class="main">
+      <header class="titlebar" data-tauri-drag-region>
+        <span class="tb-title" data-tauri-drag-region id="viewTitle">Home</span>
+        <span class="status" id="status"><i></i><span>Ready</span></span>
+        <button class="update-pill hidden" id="updPill" title="Install the new version">Update available</button>
+        <div class="spacer" data-tauri-drag-region></div>
+        <button class="tb-btn" id="tbMin" title="Minimize" data-icon="minus"></button>
+        <button class="tb-btn close" id="tbClose" title="Close" data-icon="x"></button>
+      </header>
+      <div class="views scroll" id="views">
+        <!-- each view is rendered by main.js -->
+        <section class="view" id="view-home"></section>
+        <section class="view hidden" id="view-flows"></section>
+        <section class="view hidden" id="view-ai"></section>
+        <section class="view hidden" id="view-settings"></section>
+        <section class="view hidden" id="view-provider"></section>
+        <section class="view hidden" id="view-help"></section>
+        <section class="view hidden" id="view-feedback"></section>
+      </div>
+    </main>
+  </div>
+  <div class="modal hidden" id="modal"><div class="modal-card" id="modalCard"></div></div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

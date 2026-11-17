@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Quick Actions</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    .src { margin: 12px 14px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2); transition: border-color .15s, box-shadow .15s; }
+    .src:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); background: var(--bg); }
+    .src-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+    .src textarea { width: 100%; border: 0; outline: none; background: transparent; resize: none; padding: 4px 12px 10px; min-height: 48px; max-height: 110px; line-height: 1.5; font-size: 13.5px; }
+    .prompt { display: flex; align-items: center; gap: 8px; margin: 10px 14px 6px; padding: 0 6px 0 12px; height: 46px; border-radius: 12px; border: 1px solid var(--line-2); box-shadow: var(--shadow-sm); transition: border-color .15s, box-shadow .15s; }
+    .prompt:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+    .prompt > svg { color: var(--text-3); }
+    #list { flex: 1; padding: 0 8px 8px; }
+    #result { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    #out { flex: 1; padding: 16px 18px; overflow-y: auto; font-size: 14px; }
+    .res-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+    .res-bar b { font-weight: 600; letter-spacing: -.01em; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 14px 0; border-top: 1px solid var(--line); }
+    .refine { display: flex; align-items: center; gap: 8px; margin: 8px 14px; padding: 0 5px 0 12px; height: 40px; border-radius: 11px; border: 1px solid var(--line-2); }
+    .refine:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+    .refine input { flex: 1; border: 0; outline: none; background: transparent; }
+    .deliver { display: flex; gap: 8px; padding: 10px 14px 12px; align-items: center; }
+    .lang-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 0 4px 8px; }
+    .lang-grid .item { height: 34px; }
+    .err { padding: 18px; }
+    .err b { color: var(--danger); display: block; margin-bottom: 4px; }
+    .loading { display: flex; align-items: center; gap: 10px; }
+    .outmode { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+  </style>
+</head>
+<body>
+  <div class="popup">
+    <div class="popup-head" data-tauri-drag-region>
+      <img class="logo" src="./lib/logo.svg" alt="" />
+      <b data-tauri-drag-region id="title">Quick Actions</b>
+      <span class="spacer" data-tauri-drag-region></span>
+      <span class="outmode">Result <span class="seg" id="outMode" title="Show result in a window or paste directly"><button data-v="1">Window</button><button data-v="0">Paste</button></span></span>
+      <button class="btn ghost icon sm" id="close" title="Close (Esc)" data-icon="x"></button>
+    </div>
+
+    <div id="pick" class="col" style="flex:1;min-height:0;gap:0">
+      <div class="src">
+        <div class="src-head"><span>Your text</span><span class="spacer"></span><span id="srcCount" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
+        <textarea id="src" placeholder="Select text in your app first, or paste / type it here…"></textarea>
+      </div>
+      <div class="prompt"><span data-icon="search"></span>
+        <input class="search-big" id="q" placeholder="Search actions or describe a change…" autocomplete="off" style="font-size:14.5px" />
+        <button class="btn ghost icon sm" id="improve" title="Improve this instruction with AI" data-icon="wand"></button>
+        <button class="btn primary icon sm" id="send" title="Send" data-icon="arrowRight"></button>
+      </div>
+      <div id="list" class="scroll"></div>
+    </div>
+
+    <div id="result" class="hidden">
+      <div class="res-bar">
+        <button class="btn ghost icon sm" id="back" title="Back to actions" data-icon="chevronLeft"></button>
+        <b id="resTitle"></b><span class="spacer"></span>
+        <span class="faint small" id="changes"></span>
+        <span class="seg"><button id="vPlain">Clean</button><button id="vDiff">Changes</button></span>
+        <button class="btn ghost icon sm" id="prevV" title="Previous version" data-icon="chevronLeft"></button><span class="faint small" id="vNum"></span><button class="btn ghost icon sm" id="nextV" title="Next version" data-icon="chevronRight"></button>
+      </div>
+      <div id="out" class="result-text"></div>
+      <div class="chips" id="chips">
+        <span class="chip" data-r="Make it shorter">Shorter</span><span class="chip" data-r="Make it longer and more detailed">Longer</span>
+        <span class="chip" data-r="Turn it into bullet points">Bullets</span><span class="chip" data-r="Make it more formal">More formal</span>
+        <span class="chip" data-r="Make it friendlier">Friendlier</span><span class="chip" data-r="Make it simpler">Simpler</span>
+      </div>
+      <div class="refine"><input id="refine" placeholder="Or say how to change it… e.g. add a greeting" /><button class="btn ghost icon sm" id="refineGo" data-icon="send"></button></div>
+      <div class="deliver">
+        <button class="btn primary" id="insert">Replace</button>
+        <button class="btn" id="copy"><span data-icon="copy"></span>Copy</button>
+        <button class="btn ghost hidden" id="saveAct"><span data-icon="star"></span>Save as action</button>
+        <span class="spacer"></span><span class="faint small" id="promise"></span>
+      </div>
+    </div>
+
+    <div class="popup-foot"><span class="pick-only"><kbd>↑</kbd><kbd>↓</kbd> Move</span><span class="pick-only"><kbd>↵</kbd> Run</span><span class="res-only hidden"><kbd>Ctrl</kbd><kbd>↵</kbd> Insert</span><span class="res-only hidden"><kbd>Backspace</kbd> Back</span><span class="spacer"></span><span><kbd>Esc</kbd> Close</span></div>
+  </div>
+  <script type="module" src="./actions.js"></script>
+</body>
+</html>

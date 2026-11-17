@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Keeyz: a single keycap with K, flat and quiet -->
+  <rect width="512" height="512" rx="112" fill="#1c1b1a"/>
+  <!-- keycap: base edge + top face -->
+  <rect x="112" y="128" width="288" height="272" rx="56" fill="#2f6f64"/>
+  <rect x="112" y="108" width="288" height="264" rx="56" fill="#f4f3ef"/>
+  <!-- K -->
+  <path d="M206 172 V308 M206 244 L292 172 M232 222 L296 308" fill="none" stroke="#1c1b1a" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

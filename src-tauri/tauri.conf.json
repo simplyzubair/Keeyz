@@ -1,0 +1,67 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Keeyz",
+  "version": "0.4.0",
+  "identifier": "com.skillsgeek.keeyz",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Keeyz",
+        "url": "index.html",
+        "width": 980,
+        "height": 680,
+        "minWidth": 760,
+        "minHeight": 520,
+        "decorations": false,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/installer-header.bmp",
+        "sidebarImage": "icons/installer-sidebar.bmp"
+      }
+    },
+    "publisher": "Zubair Khan",
+    "copyright": "© 2026 Zubair Khan",
+    "shortDescription": "Keeyz – AI that types where you type",
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCODUwMjQwMDI2MzkyNkUKUldSdWttTUNRQUtGdXg4NE8xZmtQOVlzcis2ZWJBVlZWWWNSb0pUT3Y0VU10cTBoY01IN1NTdUUK",
+      "endpoints": [
+        "https://github.com/simplyzubair/Keeyz/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

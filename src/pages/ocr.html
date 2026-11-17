@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Text from screen</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    html, body { background: transparent; cursor: crosshair; }
+    #shade { position: fixed; inset: 0; background: rgba(0, 0, 0, .28); }
+    #box { position: fixed; border: 1.5px solid #ffffff; border-radius: 4px; background: transparent; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .35); display: none; }
+    #tip { position: fixed; top: 28px; left: 50%; transform: translateX(-50%); background: #1c1b1a; color: #ecebe8; padding: 10px 16px; border-radius: 99px; border: 1px solid rgba(255,255,255,.1); box-shadow: 0 12px 30px -8px rgba(0,0,0,.6); display: flex; gap: 10px; align-items: center; cursor: default; font-size: 13px; }
+    #tip .muted, #tip .faint { color: #a1a7b3; }
+    #tip kbd { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); box-shadow: none; color: #c9cdd4; }
+    #panel { position: fixed; width: 420px; max-height: 320px; background: var(--bg); border-radius: 14px; border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); animation: pop .16s var(--ease); display: none; flex-direction: column; cursor: default; }
+    #panel .result-text { padding: 12px 14px; overflow: auto; flex: 1; }
+    #panel .row { padding: 10px 12px; border-top: 1px solid var(--line); }
+  </style>
+</head>
+<body>
+  <div id="shade"></div>
+  <div id="box"></div>
+  <div id="tip"><b>Select an area</b><span class="muted">Drag over the text you want to read</span><kbd>Esc</kbd><span class="faint">to cancel</span></div>
+  <div id="panel"><div class="result-text" id="txt"></div>
+    <div class="row"><button class="btn primary sm" id="qa">Open in Quick Actions</button><button class="btn sm" id="cp">Copy</button><span class="spacer"></span><button class="btn ghost sm" id="again">Select again</button><button class="btn ghost sm" id="x">Close</button></div></div>
+  <script type="module">
+    import { boot, invoke, listen, win, $, toast, hide } from './lib/core.js';
+    await boot({ popup: true });
+    let start = null, text = '';
+    const box = $('#box');
+    const reset = () => { start = null; box.style.display = 'none'; $('#panel').style.display = 'none'; $('#shade').style.display = 'block'; $('#tip').style.display = 'flex'; };
+    listen('ocr-start', reset);
+    document.addEventListener('mousedown', (e) => {
+      if (e.target.closest('#panel, #tip')) return;
+      $('#panel').style.display = 'none';
+      start = { x: e.clientX, y: e.clientY };
+      $('#shade').style.display = 'none';
+      Object.assign(box.style, { display: 'block', left: start.x + 'px', top: start.y + 'px', width: '0px', height: '0px' });
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!start) return;
+      const x = Math.min(start.x, e.clientX), y = Math.min(start.y, e.clientY);
+      Object.assign(box.style, { left: x + 'px', top: y + 'px', width: Math.abs(e.clientX - start.x) + 'px', height: Math.abs(e.clientY - start.y) + 'px' });
+    });
+    document.addEventListener('mouseup', async (e) => {
+      if (!start) return;
+      const r = { x: Math.min(start.x, e.clientX), y: Math.min(start.y, e.clientY), w: Math.abs(e.clientX - start.x), h: Math.abs(e.clientY - start.y) };
+      start = null;
+      if (r.w < 8 || r.h < 8) return reset();
+      $('#tip').innerHTML = '<div class="spinner"></div><span>Reading text…</span>';
+      try {
+        text = await invoke('ocr_capture', r);   // hides this window while capturing
+        await win.show(); await win.setFocus();
+        $('#txt').textContent = text;
+        const p = $('#panel');
+        p.style.display = 'flex';
+        p.style.left = Math.min(r.x, innerWidth - 440) + 'px';
+        p.style.top = (r.y + r.h + 340 < innerHeight ? r.y + r.h + 10 : Math.max(10, r.y - 330)) + 'px';
+        $('#tip').style.display = 'none';
+      } catch (err) {
+        await win.show();
+        toast('No readable text found', String(err), true);
+        $('#tip').innerHTML = '<b>Select an area</b><span class="muted">Drag over the text you want to read</span>';
+        reset();
+      }
+    });
+    $('#cp').onclick = async () => { await invoke('copy_text', { text }); toast('Copied'); hide(); };
+    $('#qa').onclick = async () => { await hide(); invoke('open_actions_with', { text, source: 'ocr', action: null }); };
+    $('#again').onclick = () => { $('#tip').innerHTML = '<b>Select an area</b><span class="muted">Drag over the text you want to read</span>'; reset(); };
+    $('#x').onclick = hide;
+  </script>
+</body>
+</html>

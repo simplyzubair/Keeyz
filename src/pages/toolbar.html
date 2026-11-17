@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Toolbar</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    html, body { background: transparent; }
+    .bar { margin: 4px; display: inline-flex; align-items: center; gap: 1px; padding: 3px; border-radius: 11px; background: var(--bg); border: 1px solid var(--line-2); box-shadow: 0 6px 18px -6px rgba(28,27,26,.25); animation: pop .14s var(--ease); }
+    .bar button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; height: 30px; padding: 0 9px; border-radius: 8px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--text); white-space: nowrap; transition: background .1s; }
+    .bar button svg { color: var(--text-3); }
+    .bar button:hover { background: var(--bg-hover); }
+    .bar button:hover svg { color: var(--text); }
+    .bar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+    .bar img { width: 18px; height: 18px; border-radius: 5px; margin: 0 4px; }
+    .panel { margin: 4px; width: 432px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow-lg); animation: pop .16s var(--ease); display: flex; flex-direction: column; max-height: 372px; }
+    .panel .head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+    .panel .body { padding: 10px 12px; overflow: auto; flex: 1; font-size: 13.5px; }
+    .panel .foot { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
+    .langs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+  </style>
+</head>
+<body>
+  <div class="bar" id="bar">
+    <img src="./lib/logo.svg" alt="" />
+    <button data-a="explain" data-icon="bulb">Explain</button>
+    <button data-a="summarize" data-icon="fileText">Summarize</button>
+    <button data-a="translate" data-icon="globe">Translate</button>
+    <button data-a="fix" data-icon="check">Fix</button>
+    <span class="sep"></span>
+    <button data-a="more" title="More actions" data-icon="sparkles">More</button>
+  </div>
+  <div class="panel hidden" id="panel">
+    <div class="head"><b id="pTitle"></b><span class="spacer"></span><span class="faint small" id="pChanges"></span><button class="btn ghost icon sm" id="pClose" data-icon="x"></button></div>
+    <div class="body result-text" id="pBody"></div>
+    <div class="foot" id="pFoot">
+      <button class="btn primary sm" id="pReplace">Replace</button><button class="btn sm" id="pCopy">Copy</button>
+      <button class="btn ghost sm" id="pMore" title="Use this result in Quick Actions">More actions</button>
+      <span class="spacer"></span><button class="btn ghost sm" id="pLang">Change language</button>
+    </div>
+  </div>
+  <script type="module">
+    import { boot, invoke, listen, win, $, $$, esc, toast, diffHtml, progressLabel } from './lib/core.js';
+    import { TRANSLATE_LANGS } from './lib/langs.js';
+    import { icon } from './lib/icons.js';
+    document.querySelectorAll('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon, 14)));
+    let S = await boot();
+    document.addEventListener('settings', (e) => (S = e.detail));
+    let text = '', result = '', current = null, busy = false;
+    const BAR = [380, 46], PANEL = [448, 388];
+    const size = ([w, h]) => invoke('resize_me', { w, h });
+
+    listen('toolbar-show', (e) => { text = e.payload; reset(); });
+    // hide when the user clicks somewhere else (global mouse hook)
+    listen('global-click', async (e) => {
+      const pos = await win.outerPosition(), sz = await win.outerSize();
+      const { x, y } = e.payload;
+      if (x < pos.x || y < pos.y || x > pos.x + sz.width || y > pos.y + sz.height) if (!busy) win.hide();
+    });
+    listen('escape-pressed', () => win.hide());
+
+    function reset() { $('#bar').classList.remove('hidden'); $('#panel').classList.add('hidden'); size(BAR); }
+    $$('#bar button').forEach((b) => (b.onclick = () => {
+      const a = b.dataset.a;
+      if (a === 'more') { win.hide(); return invoke('open_actions_with', { text, source: 'toolbar', action: null }); }
+      if (a === 'translate') return pickLang();
+      run(a);
+    }));
+    function openPanel(title) {
+      $('#bar').classList.add('hidden'); $('#panel').classList.remove('hidden'); size(PANEL);
+      $('#pTitle').textContent = title; $('#pChanges').textContent = '';
+    }
+    function pickLang() {
+      openPanel('Translate to');
+      $('#pFoot').classList.add('hidden');
+      const fav = [S.default_translate_lang, 'English', 'Spanish', 'French', 'German', 'Urdu', 'Arabic'];
+      const langs = [...new Set([...fav, ...TRANSLATE_LANGS])];
+      $('#pBody').innerHTML = `<input class="input" id="lq" placeholder="Search languages" style="margin-bottom:8px" /><div class="langs">${langs.map((l) => `<div class="item" data-l="${esc(l)}">${esc(l)}</div>`).join('')}</div>`;
+      $('#lq').oninput = (e) => $$('[data-l]').forEach((d) => d.classList.toggle('hidden', !d.dataset.l.toLowerCase().includes(e.target.value.toLowerCase())));
+      $$('[data-l]').forEach((d) => (d.onclick = () => run('translate', d.dataset.l)));
+      win.setFocus(); $('#lq').focus();
+    }
+    async function run(action, lang = '') {
+      current = { action, lang };
+      const name = S.actions.find((a) => a.id === action)?.name || action;
+      openPanel(lang ? `Translate to ${lang}` : name);
+      $('#pFoot').classList.remove('hidden');
+      $('#pLang').classList.toggle('hidden', action !== 'translate');
+      $('#pBody').innerHTML = `<div class="row"><div class="spinner"></div><span class="shimmer">${progressLabel(action)}</span></div>`;
+      busy = true;
+      try {
+        result = await invoke('run_action', { action, text, lang: lang || null, instruction: null, previous: null });
+        if (action === 'fix') {
+          const d = diffHtml(text, result);
+          $('#pBody').innerHTML = d.html;
+          $('#pChanges').textContent = d.changes ? `${d.changes} change${d.changes > 1 ? 's' : ''}` : 'No changes needed';
+        } else $('#pBody').textContent = result;
+        const out = S.actions.find((a) => a.id === action)?.output;
+        $('#pReplace').textContent = out === 'add' ? 'Add below' : 'Replace';
+        current.output = out;
+      } catch (e) { $('#pBody').innerHTML = `<span style="color:var(--danger)">${esc(e)}</span>`; }
+      busy = false;
+    }
+    $('#pClose').onclick = () => win.hide();
+    $('#pCopy').onclick = async () => { await invoke('copy_text', { text: result }); toast('Copied'); win.hide(); };
+    $('#pReplace').onclick = () => invoke('insert_result', { text: result, mode: current.output === 'add' ? 'add' : 'replace', original: text, action: current.action });
+    $('#pMore').onclick = () => { win.hide(); invoke('open_actions_with', { text: result || text, source: 'toolbar', action: null }); };
+    $('#pLang').onclick = pickLang;
+  </script>
+</body>
+</html>

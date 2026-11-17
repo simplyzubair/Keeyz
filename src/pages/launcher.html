@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Launcher</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    .search { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .search { height: 60px; padding: 0 16px; }
+    .search > svg { color: var(--text-3); }
+    .tabs { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--bg-3); }
+    .tabs button { border: 0; background: transparent; height: 26px; padding: 0 11px; border-radius: 7px; cursor: pointer; color: var(--text-2); font-weight: 500; font-size: 12.5px; }
+    .tabs button.on { background: var(--bg); color: var(--text); box-shadow: var(--shadow-sm); }
+    #list { flex: 1; padding: 6px 8px; }
+    .calc { font-size: 20px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+    .item.big { height: 54px; }
+    #chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    #msgs { flex: 1; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+    .msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; line-height: 1.5; user-select: text; }
+    .msg { animation: tin .2s var(--ease); }
+    .msg.user { align-self: flex-end; background: var(--ink); color: var(--ink-text); border-bottom-right-radius: 4px; }
+    .msg.assistant { align-self: flex-start; background: var(--bg-2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+    .msg .acts { display: flex; gap: 4px; margin-top: 6px; }
+    .hero-chat { margin: auto; text-align: center; color: var(--text-2); }
+    .hero-chat b { display: block; font-size: 18px; font-weight: 650; letter-spacing: -.02em; color: var(--text); margin: 12px 0 4px; }
+    .hero-chat .orb { width: 40px; height: 40px; margin: 0 auto; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); display: grid; place-items: center; color: var(--text-2); }
+    .chat-in { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  </style>
+</head>
+<body>
+  <div class="popup">
+    <div class="search" data-tauri-drag-region>
+      <span data-icon="search"></span>
+      <input class="search-big" id="q" placeholder="Search Keeyz, or ask AI anything…" autocomplete="off" style="font-size:17px" />
+      <div class="tabs"><button class="on" data-tab="search">Search</button><button data-tab="chat">Chat</button></div>
+    </div>
+    <div id="list" class="scroll"></div>
+    <div id="chat" class="hidden">
+      <div id="msgs" class="scroll"><div class="hero-chat" id="chatHero"><div class="orb" data-icon="sparkles"></div><b>Ask anything</b>Questions, drafts, ideas. Answers land right here.</div></div>
+      <div class="chat-in"><textarea class="input" id="chatIn" rows="1" style="min-height:40px;max-height:120px" placeholder="Message…"></textarea><button class="btn primary icon" id="chatSend" title="Send" data-icon="send"></button></div>
+    </div>
+    <div class="popup-foot"><img class="logo" src="./lib/logo.svg" alt="" style="width:16px;height:16px;border-radius:4px" /><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Run</span><span><kbd>Tab</kbd> Chat</span><span><kbd>Esc</kbd> Close</span><span class="spacer"></span><span id="count"></span></div>
+  </div>
+  <script type="module" src="./launcher.js"></script>
+</body>
+</html>
