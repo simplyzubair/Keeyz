@@ -191,18 +191,53 @@ pub fn release_modifiers() {
     }
 }
 
-pub fn backspaces(n: usize) {
-    for _ in 0..n {
-        tap(VK_BACK.0);
+fn ki(vk: u16, down: bool) -> INPUT {
+    let ext = matches!(vk, 0x21..=0x28 | 0x2D | 0x2E);
+    let mut flags = if down { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
+    if ext {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: 0x4B53 } },
     }
 }
 
-pub fn select_left(n: usize) {
-    key(VK_SHIFT.0, true);
-    for _ in 0..n {
-        tap(VK_LEFT.0);
+/// Send a whole key sequence in ONE SendInput call, so the user's own key presses can't land in the middle.
+fn send_block(inputs: &[INPUT]) {
+    unsafe {
+        SendInput(inputs, std::mem::size_of::<INPUT>() as i32);
     }
-    key(VK_SHIFT.0, false);
+}
+
+/// Delete `n` characters: one key at a time with a short pause, so every app keeps up.
+pub fn backspaces(n: usize) {
+    for _ in 0..n {
+        send_block(&[ki(VK_BACK.0, true), ki(VK_BACK.0, false)]);
+        sleep(Duration::from_millis(4));
+    }
+    sleep(Duration::from_millis(40));
+}
+
+/// Select `n` characters to the left (Shift + Left), one key at a time.
+pub fn select_left(n: usize) {
+    send_block(&[ki(VK_SHIFT.0, true)]);
+    for _ in 0..n {
+        send_block(&[ki(VK_LEFT.0, true), ki(VK_LEFT.0, false)]);
+        sleep(Duration::from_millis(4));
+    }
+    send_block(&[ki(VK_SHIFT.0, false)]);
+    sleep(Duration::from_millis(40));
+}
+
+/// Show a small helper window (typing bubble, selection toolbar) WITHOUT taking focus from the user's app.
+pub fn show_no_activate(hwnd: isize) {
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+        let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+    }
 }
 
 // ------------------------------------------------------------ clipboard

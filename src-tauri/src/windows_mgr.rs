@@ -127,10 +127,19 @@ pub fn show_main(app: &AppHandle) {
 // ---------------------------------------------------------------- specific windows
 
 pub fn show_typing(app: &AppHandle, pos: (i32, i32), label: &str) {
-    if let Some(w) = show(app, &TYPING, Place::Near(pos.0 + 80, pos.1)) {
-        let _ = w.set_ignore_cursor_events(true);
-        let _ = w.emit("typing-label", label.to_string());
-    }
+    let app2 = app.clone();
+    let label = label.to_string();
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(w) = get_or_create(&app2, &TYPING) {
+            place(&app2, &w, Place::Near(pos.0 + 80, pos.1));
+            let _ = w.set_ignore_cursor_events(true);
+            let _ = w.emit("typing-label", label);
+            // must not take focus: Keeyz pastes the answer into the app you're typing in
+            if let Ok(h) = w.hwnd() {
+                crate::winutil::show_no_activate(h.0 as isize);
+            }
+        }
+    });
 }
 
 pub fn hide_typing(app: &AppHandle) {
@@ -153,7 +162,13 @@ pub fn show_toolbar(app: &AppHandle, text: String, hwnd: isize, pos: (i32, i32))
             let _ = w.set_size(tauri::LogicalSize::new(TOOLBAR.w, TOOLBAR.h));
             place(&app2, &w, Place::Near(pos.0, pos.1));
             let _ = w.emit("toolbar-show", text);
-            let _ = w.show();
+            // show next to the selection without stealing focus (the selection must stay active)
+            match w.hwnd() {
+                Ok(h) => crate::winutil::show_no_activate(h.0 as isize),
+                Err(_) => {
+                    let _ = w.show();
+                }
+            }
         }
     });
 }

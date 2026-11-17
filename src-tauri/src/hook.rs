@@ -15,8 +15,22 @@ use tauri::{AppHandle, Emitter, Manager};
 
 static APP: OnceCell<AppHandle> = OnceCell::new();
 
+/// Debug builds only: append a line to %TEMP%\keeyz-debug.log (release builds log nothing).
+macro_rules! dbg_log {
+    ($($arg:tt)*) => {{
+        #[cfg(debug_assertions)]
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("keeyz-debug.log")) {
+                let _ = writeln!(f, $($arg)*);
+            }
+        }
+    }};
+}
+
 struct Typed {
     buf: String,
+    shift: bool,
     /// window the buffer belongs to; switching windows clears it
     hwnd: isize,
     spaces: u8,
@@ -33,6 +47,7 @@ struct Typed {
 static T: Lazy<Mutex<Typed>> = Lazy::new(|| {
     Mutex::new(Typed {
         buf: String::new(),
+        shift: false,
         hwnd: 0,
         spaces: 0,
         last_key: Instant::now(),
@@ -89,6 +104,7 @@ fn on_event(ev: rdev::Event) {
             let mut t = T.lock().unwrap();
             match k {
                 Key::ControlLeft | Key::ControlRight => t.ctrl = false,
+                Key::ShiftLeft | Key::ShiftRight => t.shift = false,
                 Key::Alt | Key::AltGr => t.alt = false,
                 Key::MetaLeft | Key::MetaRight => t.win = false,
                 _ => {}
@@ -122,7 +138,8 @@ fn on_key(k: Key, name: Option<String>) {
         Key::ControlLeft | Key::ControlRight => { t.ctrl = true; return; }
         Key::Alt | Key::AltGr => { t.alt = true; return; }
         Key::MetaLeft | Key::MetaRight => { t.win = true; return; }
-        Key::ShiftLeft | Key::ShiftRight | Key::CapsLock => return,
+        Key::ShiftLeft | Key::ShiftRight => { t.shift = true; return; }
+        Key::CapsLock => return,
         Key::Escape => {
             CANCEL.store(true, Ordering::SeqCst);
             reset(&mut t);
@@ -142,11 +159,17 @@ fn on_key(k: Key, name: Option<String>) {
         }
         _ => {}
     }
+    #[cfg(debug_assertions)]
+    if (t.ctrl || t.alt || t.win || t.busy) && name.as_deref() == Some(" ") {
+        dbg_log!("[keeyz-debug] space ignored · ctrl={} alt={} win={} busy={}", t.ctrl, t.alt, t.win, t.busy);
+    }
     if t.ctrl || t.alt || t.win || t.busy {
         if t.ctrl || t.win { reset(&mut t); }
         return;
     }
     let Some(s) = name else { return };
+    // The hook often reports the un-shifted character ("8" for "*", "k" for "K"). Fix that ourselves.
+    let s = if t.shift { shifted(&s) } else { s };
     if s.is_empty() || s.chars().any(|c| c.is_control()) {
         return;
     }
@@ -165,6 +188,8 @@ fn on_key(k: Key, name: Option<String>) {
     let settings = app.state::<AppState>().settings();
     if t.spaces >= settings.run_spaces && !TRIGGER_PAUSED.load(Ordering::SeqCst) {
         let snapshot = t.buf.clone();
+        #[cfg(debug_assertions)]
+        dbg_log!("[keeyz-debug] double space · buffer={:?} trigger={:?} cmd={}", snapshot, find_trigger(&snapshot, &settings.trigger_word), find_command(&snapshot, &settings).is_some());
         let interesting = (settings.typed_commands
             && (find_trigger(&snapshot, &settings.trigger_word).is_some() || find_command(&snapshot, &settings).is_some()))
             || settings.live_translate
@@ -175,6 +200,20 @@ fn on_key(k: Key, name: Option<String>) {
             std::thread::spawn(move || evaluate(snapshot));
         }
     }
+}
+
+/// Character produced with Shift held, for a character reported without Shift (US layout keys).
+/// Characters that already are shifted pass through unchanged.
+fn shifted(s: &str) -> String {
+    let mut chars = s.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return s.to_string() };
+    let out = match c {
+        'a'..='z' => c.to_ascii_uppercase(),
+        '1' => '!', '2' => '@', '3' => '#', '4' => '$', '5' => '%', '6' => '^', '7' => '&', '8' => '*', '9' => '(', '0' => ')',
+        '-' => '_', '=' => '+', '[' => '{', ']' => '}', '\\' => '|', ';' => ':', '\'' => '"', ',' => '<', '.' => '>', '/' => '?', '`' => '~',
+        other => other,
+    };
+    out.to_string()
 }
 
 fn on_mouse_up() {
@@ -205,7 +244,9 @@ fn on_mouse_up() {
         if crate::windows_mgr::is_own_window(&app, fg) {
             return;
         }
-        if let Some(text) = winutil::uia_selection() {
+        let sel = winutil::uia_selection();
+        dbg_log!("[keeyz-debug] mouse-up selection: dragged={dragged} dbl={dbl} found={:?}", sel.as_deref().map(|t| t.chars().take(40).collect::<String>()));
+        if let Some(text) = sel {
             if text.chars().count() >= 2 {
                 crate::windows_mgr::show_toolbar(&app, text, fg, p);
             }
@@ -295,6 +336,8 @@ fn evaluate(buf: String) {
             let trailing = buf.chars().count() - buf.trim_end().chars().count();
             match cmd {
                 Cmd::Calc(expr, n) => {
+                    #[cfg(debug_assertions)]
+                    dbg_log!("[keeyz-debug] calc expr={:?} delete={} trailing={}", expr, n, trailing);
                     let expr2 = expr.replace('x', "*").replace('×', "*").replace('÷', "/").replace(',', "");
                     let out = match meval::eval_str(&expr2) {
                         Ok(v) => format_num(v),
@@ -385,7 +428,9 @@ fn run_ai(app: AppHandle, hwnd: isize, delete: usize, system: String, user: Stri
     crate::windows_mgr::show_typing(&app, pos, "Working…");
     tauri::async_runtime::spawn(async move {
         let settings = app.state::<AppState>().settings();
+        let t0 = std::time::Instant::now();
         let res = crate::ai::ask(&settings, &system, &user).await;
+        dbg_log!("[keeyz-debug] trigger AI took {} ms via {:?} ok={}", t0.elapsed().as_millis(), crate::fast::LAST_USED.lock().unwrap().clone(), res.is_ok());
         crate::windows_mgr::hide_typing(&app);
         if CANCEL.load(Ordering::SeqCst) {
             return done();
@@ -443,6 +488,16 @@ mod tests {
         assert_eq!(cmd_len("abc /calc 2+2  "), Some(("2+2".into(), 9)));
         assert_eq!(cmd_len("the total is /calc 12*8+4  "), Some(("12*8+4".into(), 12)));
         assert_eq!(cmd_len("/calc 5*5  "), Some(("5*5".into(), 9)));
+    }
+
+    #[test]
+    fn shift_characters() {
+        assert_eq!(shifted("8"), "*");
+        assert_eq!(shifted("k"), "K");
+        assert_eq!(shifted("K"), "K");
+        assert_eq!(shifted("*"), "*");
+        assert_eq!(shifted("/"), "?");
+        assert_eq!(shifted("ab"), "ab");
     }
 
     #[test]
