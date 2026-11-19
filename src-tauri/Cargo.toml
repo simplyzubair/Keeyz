@@ -1,6 +1,6 @@
 [package]
 name = "keeyz"
-version = "0.4.2"
+version = "0.5.0"
 description = "Keeyz - AI that types where you type"
 edition = "2021"
 
