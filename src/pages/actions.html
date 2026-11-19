@@ -27,6 +27,8 @@
     .err { padding: 18px; }
     .err b { color: var(--danger); display: block; margin-bottom: 4px; }
     .loading { display: flex; align-items: center; gap: 10px; }
+    .mic-live { color: var(--accent) !important; background: var(--accent-soft) !important; animation: micPulse 1.2s ease-in-out infinite; }
+    @keyframes micPulse { 50% { opacity: .55; } }
     .outmode { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
   </style>
 </head>
@@ -47,6 +49,7 @@
       </div>
       <div class="prompt"><span data-icon="search"></span>
         <input class="search-big" id="q" placeholder="Search actions or describe a change…" autocomplete="off" style="font-size:14.5px" />
+        <button class="btn ghost icon sm" id="mic" title="Speak your instruction" data-icon="mic"></button>
         <button class="btn ghost icon sm" id="improve" title="Improve this instruction with AI" data-icon="wand"></button>
         <button class="btn primary icon sm" id="send" title="Send" data-icon="arrowRight"></button>
       </div>
@@ -67,7 +70,7 @@
         <span class="chip" data-r="Turn it into bullet points">Bullets</span><span class="chip" data-r="Make it more formal">More formal</span>
         <span class="chip" data-r="Make it friendlier">Friendlier</span><span class="chip" data-r="Make it simpler">Simpler</span>
       </div>
-      <div class="refine"><input id="refine" placeholder="Or say how to change it… e.g. add a greeting" /><button class="btn ghost icon sm" id="refineGo" data-icon="send"></button></div>
+      <div class="refine"><input id="refine" placeholder="Or say how to change it… e.g. add a greeting" /><button class="btn ghost icon sm" id="refineMic" title="Speak your instruction" data-icon="mic"></button><button class="btn ghost icon sm" id="refineGo" data-icon="send"></button></div>
       <div class="deliver">
         <button class="btn primary" id="insert">Replace</button>
         <button class="btn" id="copy"><span data-icon="copy"></span>Copy</button>

@@ -72,6 +72,8 @@ async function installUpdate() {
 $('#updPill').onclick = installUpdate;
 listen('update-available', (e) => showUpdate(e.payload));
 listen('check-update', () => checkUpdate(true));
+listen('install-update', () => installUpdate());
+listen('run-tour', () => welcome(true));
 listen('update-progress', (e) => { for (const el of [$('#updPill'), $('#updNow')]) if (el) el.textContent = `Updating… ${e.payload}%`; });
 
 // ============================================================ HOME
@@ -338,7 +340,7 @@ function bindSwitches(el) {
 const row = (title, desc, control) => `<div class="set-row"><div class="s-text"><b>${title}</b><span>${desc}</span></div>${control}</div>`;
 const select = (key, opts) => `<select class="input" data-sel="${key}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(S[key]) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
 const seg = (key, opts) => `<div class="seg" data-seg="${key}">${opts.map(([v, l]) => `<button data-v="${v}">${l}</button>`).join('')}</div>`;
-const SHORTCUT_NAMES = { actions: 'Quick Actions', launcher: 'Launcher', clipboard: 'Clipboard History', voice: 'Voice Input', ocr: 'Text from Screen', undo: 'Undo last change', summarize: 'Summarize page', show_app: 'Open Keeyz' };
+const SHORTCUT_NAMES = { actions: 'Quick Actions', launcher: 'Launcher', clipboard: 'Clipboard History', voice: 'Voice Input', ocr: 'Text from Screen', undo: 'Undo last change', reply: 'Reply from screen', summarize: 'Summarize page', show_app: 'Open Keeyz' };
 
 async function renderSettings() {
   const el = $('#view-settings');
@@ -668,7 +670,8 @@ function renderHelp() {
     <div class="help-grid">${card('bolt', `Quick Actions · ${kbd(sc.actions)}`, 'Select text, press the shortcut, pick an action (Fix grammar, Shorten, Professional, Translate, Summarize, Reply…) or describe a change. Review the result, then Replace or Copy.')}
     ${card('keyboard', `Typed trigger · ${w}`, `Type your text, then <b>${w}</b> + an instruction, then press space twice. Example: <i>this meeting couldve been an email lol ${w} make it formal</i>. With nothing before it, it writes new text: <i>${w} write a thank-you note</i>. Reminders: <i>${w} remind me in 10 minutes to call mom</i>. Press Esc to cancel.`)}
     ${card('calc', 'Typed commands', '<code>/calc 12*8</code> · <code>/search best pizza</code> · <code>/yt lofi</code> · <code>/maps coffee near me</code>, then space twice. Add your own commands in Settings.')}
-    ${card('wand', 'Selection toolbar', 'Select text with the mouse in any app: a small toolbar offers Explain, Summarize, Translate, Fix and more, without touching your clipboard.')}
+    ${card('wand', 'Selection toolbar', 'Select text with the mouse in any app: a small toolbar shows the buttons that fit. Your own text gets Fix, Professional, Shorten; a word gets Define; long text gets Summarize and Key points. Translate offers your recent languages, and ⋯ opens every action.')}
+    ${card('reply', `Reply from screen · ${kbd(sc.reply || 'Ctrl+Shift+Y')}`, 'Click in the reply box of any chat or mail and press the shortcut. Keeyz reads the conversation on screen and writes the answer. Type a few words first to steer it.')}
     ${card('search', `Launcher · ${kbd(sc.launcher)}`, 'One search box for tools, actions and workflows. Type maths (12 * 8), search your clipboard, or press Tab to chat with the AI.')}
     ${card('mic', `Voice typing · ${kbd(sc.voice)}`, 'Dictate in 50+ languages. When you stop: Insert (cleaned up), Insert as heard, Continue, or send to Quick Actions.')}
     ${card('clipboard', `Clipboard history · ${kbd(sc.clipboard)}`, 'Search, pin, paste with 1–9, or run AI on any past clip. Images are kept too and can be read with OCR.')}
@@ -699,7 +702,9 @@ function welcome(force = false) {
       <div class="welcome-step"><span class="n">1</span><div><b>Add your AI key</b><div class="muted small">OpenAI, Anthropic, Gemini, OpenRouter or a local model. Stored only on this PC.</div></div></div>
       <div class="welcome-step"><span class="n">2</span><div><b>Select text, press ${kbd(sc.actions)}</b><div class="muted small">Pick Fix, Shorten, Translate… or describe the change.</div></div></div>
       <div class="welcome-step"><span class="n">3</span><div><b>Or type it: <i>your text ${w} make it shorter</i> + space twice</b><div class="muted small">Works in every app. Esc cancels.</div></div></div>
-      <div class="welcome-step"><span class="n">4</span><div><b>More tools</b><div class="muted small">Launcher ${kbd(sc.launcher)} · Voice ${kbd(sc.voice)} · Clipboard ${kbd(sc.clipboard)} · Text from screen ${kbd(sc.ocr)}</div></div></div>
+      <div class="welcome-step"><span class="n">4</span><div><b>Or just select text</b><div class="muted small">A small toolbar appears next to your selection with the right buttons for it. ⋯ opens every action.</div></div></div>
+      <div class="welcome-step"><span class="n">5</span><div><b>Reply with one key: ${kbd(sc.reply || 'Ctrl+Shift+Y')}</b><div class="muted small">Click in the reply box of any chat or mail and press it. Keeyz reads the conversation on screen and writes the answer. Type a few words first to steer it.</div></div></div>
+      <div class="welcome-step"><span class="n">6</span><div><b>More tools</b><div class="muted small">Launcher ${kbd(sc.launcher)} · Voice ${kbd(sc.voice)} · Clipboard ${kbd(sc.clipboard)} · Text from screen ${kbd(sc.ocr)}</div></div></div>
     </div>
     <div class="row"><span class="faint small">Keeyz stays in your system tray so shortcuts work everywhere.</span><span class="spacer"></span>
       <button class="btn" id="wLater">Later</button><button class="btn grad" id="wKey">Add my AI key</button></div>`);

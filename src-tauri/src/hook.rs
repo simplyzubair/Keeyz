@@ -249,7 +249,8 @@ fn on_mouse_up() {
         let sel = diag.ok();
         if let Some(text) = sel {
             if text.chars().count() >= 2 {
-                crate::windows_mgr::show_toolbar(&app, text, fg, p);
+                let editable = winutil::focused_editable();
+                crate::windows_mgr::show_toolbar(&app, text, editable, fg, p);
             }
         }
     });
@@ -423,7 +424,7 @@ fn format_num(v: f64) -> String {
 }
 
 /// Call the AI, then delete `delete` typed chars (usize::MAX = replace selection) and paste the result.
-fn run_ai(app: AppHandle, hwnd: isize, delete: usize, system: String, user: String, original: String, action: String) {
+pub fn run_ai(app: AppHandle, hwnd: isize, delete: usize, system: String, user: String, original: String, action: String) {
     CANCEL.store(false, Ordering::SeqCst);
     let pos = winutil::caret_pos().unwrap_or_else(winutil::cursor_pos);
     crate::windows_mgr::show_typing(&app, pos, "Working…");

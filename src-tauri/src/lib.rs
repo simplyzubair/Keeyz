@@ -68,23 +68,35 @@ fn suspend_shortcuts(app: AppHandle, suspend: bool) {
     }
 }
 
+/// Tray "Check for updates…" item; it turns into "Update to vX" once a new version is found.
+static UPDATE_ITEM: once_cell::sync::OnceCell<MenuItem<tauri::Wry>> = once_cell::sync::OnceCell::new();
+static UPDATE_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Show "⬆ Update to vX" in the tray menu.
+pub fn tray_update_ready(version: &str) {
+    if let Some(item) = UPDATE_ITEM.get() {
+        UPDATE_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = item.set_text(format!("⬆  Update to v{version}"));
+    }
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let version = app.package_info().version.to_string();
     let open = MenuItem::with_id(app, "open", "Open Keeyz", true, None::<&str>)?;
-    let pause = CheckMenuItem::with_id(app, "pause", "Pause typed triggers", true, false, None::<&str>)?;
-    let actions = MenuItem::with_id(app, "t_actions", "Quick Actions", true, None::<&str>)?;
-    let launcher = MenuItem::with_id(app, "t_launcher", "Launcher", true, None::<&str>)?;
-    let clip = MenuItem::with_id(app, "t_clipboard", "Clipboard history", true, None::<&str>)?;
-    let voice = MenuItem::with_id(app, "t_voice", "Voice input", true, None::<&str>)?;
-    let ocr = MenuItem::with_id(app, "t_ocr", "Text from screen", true, None::<&str>)?;
-    let help = MenuItem::with_id(app, "help", "How to use", true, None::<&str>)?;
     let feedback = MenuItem::with_id(app, "feedback", "Send feedback", true, None::<&str>)?;
-    let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
+    let help = MenuItem::with_id(app, "help", "How to use", true, None::<&str>)?;
+    let ver = MenuItem::with_id(app, "version", format!("Version {version}"), false, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", "Check for updates…", true, None::<&str>)?;
+    let tour = MenuItem::with_id(app, "tour", "Run setup tour…", true, None::<&str>)?;
+    let pause = CheckMenuItem::with_id(app, "pause", "Pause typed triggers", true, false, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let sep = || PredefinedMenuItem::separator(app);
     let menu = Menu::with_items(
         app,
-        &[&open, &pause, &sep()?, &actions, &launcher, &clip, &voice, &ocr, &sep()?, &help, &feedback, &update, &sep()?, &quit],
+        &[&open, &sep()?, &feedback, &help, &sep()?, &ver, &update, &sep()?, &tour, &pause, &settings, &sep()?, &quit],
     )?;
+    let _ = UPDATE_ITEM.set(update.clone());
     let pause2 = pause.clone();
     TrayIconBuilder::with_id("tray")
         .icon(app.default_window_icon().cloned().expect("icon"))
@@ -97,11 +109,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 let p = pause2.is_checked().unwrap_or(false);
                 commands::set_trigger_paused(app.clone(), p);
             }
-            "t_actions" => commands::open_tool(app.clone(), "actions".into()),
-            "t_launcher" => commands::open_tool(app.clone(), "launcher".into()),
-            "t_clipboard" => commands::open_tool(app.clone(), "clipboard".into()),
-            "t_voice" => commands::open_tool(app.clone(), "voice".into()),
-            "t_ocr" => commands::open_ocr(app),
             "help" => {
                 windows_mgr::show_main(app);
                 let _ = app.emit("navigate", "help");
@@ -110,10 +117,22 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 windows_mgr::show_main(app);
                 let _ = app.emit("navigate", "feedback");
             }
+            "settings" => {
+                windows_mgr::show_main(app);
+                let _ = app.emit("navigate", "settings");
+            }
+            "tour" => {
+                windows_mgr::show_main(app);
+                let _ = app.emit("run-tour", ());
+            }
             "update" => {
                 windows_mgr::show_main(app);
                 let _ = app.emit("navigate", "settings");
-                let _ = app.emit("check-update", ());
+                if UPDATE_READY.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = app.emit("install-update", ());
+                } else {
+                    let _ = app.emit("check-update", ());
+                }
             }
             "quit" => app.exit(0),
             _ => {}
@@ -198,6 +217,7 @@ pub fn run() {
                 loop {
                     if let Ok(v) = commands::find_update(&h3).await {
                         if v["available"] == true {
+                            tray_update_ready(v["version"].as_str().unwrap_or_default());
                             let _ = h3.emit("update-available", &v);
                         }
                     }

@@ -300,7 +300,7 @@ pub fn paste_text(hwnd: isize, text: &str) {
         }
         ctrl(VK_V);
     });
-    // slow apps read the clipboard a little after Ctrl+V – wait before putting the old content back
+    // slow apps read the clipboard a little after Ctrl+V â€“ wait before putting the old content back
     sleep(Duration::from_millis(600));
     if let Some(o) = old {
         clip_set(&o);
@@ -336,6 +336,41 @@ pub fn uia_selection_diag() -> Result<String, String> {
     }
     let t = out.trim().to_string();
     if t.is_empty() { Err(format!("empty selection on [{info}]")) } else { Ok(t) }
+}
+
+/// Text inside the focused text box (what the user already typed), if it can be read.
+pub fn focused_text() -> Option<String> {
+    use uiautomation::patterns::{UITextPattern, UIValuePattern};
+    let auto = uiautomation::UIAutomation::new().ok()?;
+    let el = auto.get_focused_element().ok()?;
+    if let Ok(vp) = el.get_pattern::<UIValuePattern>() {
+        if let Ok(v) = vp.get_value() {
+            return Some(v);
+        }
+    }
+    let tp = el.get_pattern::<UITextPattern>().ok()?;
+    tp.get_document_range().ok()?.get_text(20_000).ok()
+}
+
+/// Window position and size in screen pixels: (x, y, w, h).
+pub fn window_rect(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+    let mut r = windows::Win32::Foundation::RECT::default();
+    unsafe { GetWindowRect(HWND(hwnd as *mut _), &mut r).ok()? };
+    Some((r.left, r.top, r.right - r.left, r.bottom - r.top))
+}
+
+/// True when the focused control is a text box the user can type in (not a read-only page).
+pub fn focused_editable() -> bool {
+    use uiautomation::patterns::UIValuePattern;
+    use uiautomation::controls::ControlType;
+    let Ok(auto) = uiautomation::UIAutomation::new() else { return false };
+    let Ok(el) = auto.get_focused_element() else { return false };
+    if let Ok(vp) = el.get_pattern::<UIValuePattern>() {
+        if let Ok(ro) = vp.is_readonly() {
+            return !ro;
+        }
+    }
+    matches!(el.get_control_type(), Ok(ControlType::Edit))
 }
 
 /// Whole text of the focused document (used by "Summarize page").

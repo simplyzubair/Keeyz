@@ -890,6 +890,44 @@ pub fn quit_app(app: AppHandle) {
 
 // ================================================================ hotkey handlers
 
+/// "Reply from screen": read the conversation in the window you are in, write an answer and
+/// put it in the reply box. Words already typed in the box steer the reply.
+pub fn reply_from_screen(app: &AppHandle) {
+    let st = app.state::<AppState>();
+    let hwnd = remember_target(&st);
+    if wm::is_own_window(app, hwnd) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let draft = winutil::focused_text().unwrap_or_default().trim().to_string();
+        // 1) the page text through UI Automation, 2) otherwise read the window with OCR
+        let mut convo = winutil::uia_document_text().unwrap_or_default();
+        if convo.trim().len() < 40 || convo.trim() == draft {
+            convo = winutil::window_rect(hwnd)
+                .and_then(|(x, y, w, h)| crate::ocr::capture(x, y, w, h).ok().map(|b| (b, w, h)))
+                .and_then(|(b, w, h)| crate::ocr::recognize(b, w as u32, h as u32).ok())
+                .unwrap_or_default();
+        }
+        if convo.trim().is_empty() {
+            return notify(&app, "Nothing to reply to", "Couldn't read the conversation in this window.");
+        }
+        // the newest messages are at the end; keep the input small so the answer comes fast
+        let convo: String = {
+            let c: Vec<char> = convo.chars().collect();
+            c[c.len().saturating_sub(6000)..].iter().collect()
+        };
+        let settings = app.state::<AppState>().settings();
+        let system = crate::prompts::system_for(&settings, crate::prompts::REPLY_SCREEN, false);
+        let mut user = crate::prompts::wrap_text(&convo);
+        if !draft.is_empty() {
+            user.push_str(&format!("\n\nWhat I want to say (my notes, turn them into the reply): {draft}"));
+        }
+        let delete = if draft.is_empty() { 0 } else { usize::MAX };
+        crate::hook::run_ai(app, hwnd, delete, system, user, draft, "reply_screen".into());
+    });
+}
+
 pub fn hotkey(app: &AppHandle, id: &str) {
     let st = app.state::<AppState>();
     match id {
@@ -931,6 +969,7 @@ pub fn hotkey(app: &AppHandle, id: &str) {
             open_ocr(app);
         }
         "undo" => undo_last(app),
+        "reply" => reply_from_screen(app),
         "show_app" => wm::show_main(app),
         "summarize" => {
             let hwnd = remember_target(&st);

@@ -1,6 +1,7 @@
 import { boot, invoke, listen, win, $, $$, esc, h, getSettings, saveSettings, toast, diffHtml, progressLabel, hide } from './lib/core.js';
 import { TRANSLATE_LANGS } from './lib/langs.js';
 import { icon, actIcon } from './lib/icons.js';
+import { micToggle } from './lib/mic.js';
 document.querySelectorAll('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon, 15)));
 
 
@@ -33,6 +34,9 @@ $('#improve').onclick = async () => {
   try { q.value = await invoke('improve_text', { text: q.value, kind: 'instruction' }); } catch (e) { toast('Failed to improve instruction', String(e), true); }
   $('#improve').disabled = false;
 };
+// speak an instruction instead of typing it
+$('#mic').onclick = () => micToggle($('#mic'), (t) => { q.value = t; run({ action: 'custom', instruction: t }); }, S);
+$('#refineMic').onclick = () => micToggle($('#refineMic'), (t) => run(current, t), S);
 $$('#outMode button').forEach((b) => (b.onclick = async () => { S = await saveSettings({ output_window: b.dataset.v === '1' }); markOut(); }));
 const markOut = () => $$('#outMode button').forEach((b) => b.classList.toggle('on', (b.dataset.v === '1') === S.output_window));
 

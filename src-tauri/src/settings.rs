@@ -178,6 +178,7 @@ pub fn default_shortcuts() -> HashMap<String, String> {
         ("voice", "Ctrl+Shift+M"),
         ("ocr", "Ctrl+Shift+O"),
         ("undo", "Ctrl+Shift+Z"),
+        ("reply", "Ctrl+Shift+Y"),
         ("summarize", ""),
         ("show_app", ""),
     ]

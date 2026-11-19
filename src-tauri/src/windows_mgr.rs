@@ -146,7 +146,7 @@ pub fn hide_typing(app: &AppHandle) {
     hide(app, "typing");
 }
 
-pub fn show_toolbar(app: &AppHandle, text: String, hwnd: isize, pos: (i32, i32)) {
+pub fn show_toolbar(app: &AppHandle, text: String, editable: bool, hwnd: isize, pos: (i32, i32)) {
     {
         let st = app.state::<AppState>();
         let mut c = st.capture.lock().unwrap();
@@ -161,7 +161,7 @@ pub fn show_toolbar(app: &AppHandle, text: String, hwnd: isize, pos: (i32, i32))
         if let Some(w) = get_or_create(&app2, &TOOLBAR).ok() {
             let _ = w.set_size(tauri::LogicalSize::new(TOOLBAR.w, TOOLBAR.h));
             place(&app2, &w, Place::Near(pos.0, pos.1));
-            let _ = w.emit("toolbar-show", text);
+            let _ = w.emit("toolbar-show", serde_json::json!({ "text": text, "editable": editable }));
             // show next to the selection without stealing focus (the selection must stay active)
             match w.hwnd() {
                 Ok(h) => crate::winutil::show_no_activate(h.0 as isize),
