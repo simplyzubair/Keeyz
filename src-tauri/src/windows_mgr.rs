@@ -147,6 +147,7 @@ pub fn hide_typing(app: &AppHandle) {
 }
 
 pub fn show_toolbar(app: &AppHandle, text: String, editable: bool, hwnd: isize, pos: (i32, i32)) {
+    crate::hook::TOOLBAR_UP.store(true, std::sync::atomic::Ordering::SeqCst);
     {
         let st = app.state::<AppState>();
         let mut c = st.capture.lock().unwrap();

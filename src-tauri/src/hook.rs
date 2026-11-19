@@ -15,6 +15,27 @@ use tauri::{AppHandle, Emitter, Manager};
 
 static APP: OnceCell<AppHandle> = OnceCell::new();
 
+/// True while the selection toolbar may be on screen (typing or scrolling closes it).
+pub static TOOLBAR_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Text that was already selected when the mouse button went down. If a drag ends with the
+/// same selection, nothing new was selected (a window or scrollbar was moved): no toolbar.
+static SEL_BEFORE: Lazy<Mutex<(u64, Option<String>)>> = Lazy::new(|| Mutex::new((0, None)));
+static CLICK_NO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Close the toolbar when the user types or scrolls somewhere else (never blocks the hook).
+fn close_toolbar_soon() {
+    if !TOOLBAR_UP.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let Some(app) = APP.get().cloned() else { return };
+    std::thread::spawn(move || {
+        // typing inside the toolbar's own language search must not close it
+        if !crate::windows_mgr::is_own_window(&app, winutil::foreground()) {
+            crate::windows_mgr::hide(&app, "toolbar");
+        }
+    });
+}
+
 /// Debug builds only: append a line to %TEMP%\keeyz-debug.log (release builds log nothing).
 macro_rules! dbg_log {
     ($($arg:tt)*) => {{
@@ -99,7 +120,13 @@ fn on_event(ev: rdev::Event) {
         return;
     }
     match ev.event_type {
-        EventType::KeyPress(k) => on_key(k, ev.name),
+        EventType::KeyPress(k) => {
+            if !matches!(k, Key::ControlLeft | Key::ControlRight | Key::ShiftLeft | Key::ShiftRight | Key::Alt | Key::AltGr | Key::MetaLeft | Key::MetaRight) {
+                close_toolbar_soon();
+            }
+            on_key(k, ev.name)
+        }
+        EventType::Wheel { .. } => close_toolbar_soon(),
         EventType::KeyRelease(k) => {
             let mut t = T.lock().unwrap();
             match k {
@@ -118,6 +145,14 @@ fn on_event(ev: rdev::Event) {
             drop(t);
             if let Some(app) = APP.get() {
                 let _ = app.emit("global-click", serde_json::json!({"x": p.0, "y": p.1}));
+                let no = CLICK_NO.fetch_add(1, Ordering::SeqCst) + 1;
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    if app.state::<AppState>().settings().selection_toolbar {
+                        let before = winutil::uia_selection();
+                        *SEL_BEFORE.lock().unwrap() = (no, before);
+                    }
+                });
             }
         }
         EventType::ButtonPress(_) => reset(&mut T.lock().unwrap()),
@@ -248,6 +283,14 @@ fn on_mouse_up() {
         dbg_log!("[keeyz-debug] mouse-up selection: dragged={dragged} dbl={dbl} result={:?}", diag.as_ref().map(|t| t.chars().take(40).collect::<String>()));
         let sel = diag.ok();
         if let Some(text) = sel {
+            // a drag that left the old selection as it was did not select anything new
+            let stale = !dbl && {
+                let b = SEL_BEFORE.lock().unwrap();
+                b.0 == CLICK_NO.load(Ordering::SeqCst) && b.1.as_deref() == Some(text.as_str())
+            };
+            if stale {
+                return;
+            }
             if text.chars().count() >= 2 {
                 let editable = winutil::focused_editable();
                 crate::windows_mgr::show_toolbar(&app, text, editable, fg, p);
