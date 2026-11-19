@@ -19,7 +19,8 @@ static APP: OnceCell<AppHandle> = OnceCell::new();
 pub static TOOLBAR_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Text that was already selected when the mouse button went down. If a drag ends with the
 /// same selection, nothing new was selected (a window or scrollbar was moved): no toolbar.
-static SEL_BEFORE: Lazy<Mutex<(u64, Option<String>)>> = Lazy::new(|| Mutex::new((0, None)));
+/// (click number, selection read at mouse-down, when that read finished, press was on a title bar / border / scrollbar)
+static SEL_BEFORE: Lazy<Mutex<(u64, Option<String>, Option<Instant>, bool)>> = Lazy::new(|| Mutex::new((0, None, None, false)));
 static CLICK_NO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Close the toolbar when the user types or scrolls somewhere else (never blocks the hook).
@@ -164,8 +165,18 @@ fn on_event(ev: rdev::Event) {
                         }
                     }
                     if app.state::<AppState>().settings().selection_toolbar {
-                        let before = winutil::uia_selection();
-                        *SEL_BEFORE.lock().unwrap() = (no, before);
+                        let frame = !winutil::is_client_area(p);
+                        *SEL_BEFORE.lock().unwrap() = (no, None, None, frame);
+                        if !frame {
+                            // read it just after the app handled the press: a press into text
+                            // clears the old selection, a scrollbar / window drag keeps it
+                            std::thread::sleep(Duration::from_millis(60));
+                            let before = winutil::uia_selection();
+                            let mut b = SEL_BEFORE.lock().unwrap();
+                            if b.0 == no {
+                                *b = (no, before, Some(Instant::now()), false);
+                            }
+                        }
                     }
                 });
             }
@@ -268,6 +279,7 @@ fn shifted(s: &str) -> String {
 
 fn on_mouse_up() {
     let p = winutil::cursor_pos();
+    let released = Instant::now();
     let (dragged, dbl) = {
         let mut t = T.lock().unwrap();
         let dragged = t
@@ -298,10 +310,13 @@ fn on_mouse_up() {
         dbg_log!("[keeyz-debug] mouse-up selection: dragged={dragged} dbl={dbl} result={:?}", diag.as_ref().map(|t| t.chars().take(40).collect::<String>()));
         let sel = diag.ok();
         if let Some(text) = sel {
-            // a drag that left the old selection as it was did not select anything new
+            // Dragging a title bar, border or scrollbar selects nothing new. Also skip a drag that
+            // ended with exactly the selection that was there before it started (only trusted
+            // when that "before" reading finished before the mouse was released).
             let stale = !dbl && {
                 let b = SEL_BEFORE.lock().unwrap();
-                b.0 == CLICK_NO.load(Ordering::SeqCst) && b.1.as_deref() == Some(text.as_str())
+                b.0 == CLICK_NO.load(Ordering::SeqCst)
+                    && (b.3 || (b.2.map(|at| at < released).unwrap_or(false) && b.1.as_deref() == Some(text.as_str())))
             };
             if stale {
                 return;

@@ -352,6 +352,32 @@ pub fn focused_text() -> Option<String> {
     tp.get_document_range().ok()?.get_text(20_000).ok()
 }
 
+/// False when the screen point is on a window's title bar, border or scrollbar (not its content).
+pub fn is_client_area(p: (i32, i32)) -> bool {
+    unsafe {
+        let h = WindowFromPoint(POINT { x: p.0, y: p.1 });
+        if h.0.is_null() {
+            return true;
+        }
+        let lp = ((p.1 as u32 & 0xFFFF) << 16) | (p.0 as u32 & 0xFFFF);
+        let mut res: usize = 0;
+        let ok = SendMessageTimeoutW(
+            h,
+            WM_NCHITTEST,
+            windows::Win32::Foundation::WPARAM(0),
+            windows::Win32::Foundation::LPARAM(lp as i32 as isize),
+            SMTO_ABORTIFHUNG,
+            80,
+            Some(&mut res),
+        );
+        if ok.0 == 0 {
+            return true;
+        }
+        // HTCLIENT = 1; anything else (caption, border, scrollbars, menu) is the frame
+        matches!(res as i32, 1 | 0 | -1)
+    }
+}
+
 /// Window position and size in screen pixels: (x, y, w, h).
 pub fn window_rect(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
     let mut r = windows::Win32::Foundation::RECT::default();
