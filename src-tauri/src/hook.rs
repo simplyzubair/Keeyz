@@ -148,6 +148,21 @@ fn on_event(ev: rdev::Event) {
                 let no = CLICK_NO.fetch_add(1, Ordering::SeqCst) + 1;
                 let app = app.clone();
                 std::thread::spawn(move || {
+                    // a click anywhere outside the selection toolbar closes it
+                    if let Some(w) = app.get_webview_window("toolbar") {
+                        if w.is_visible().unwrap_or(false) {
+                            let inside = w
+                                .hwnd()
+                                .ok()
+                                .and_then(|h| winutil::window_rect(h.0 as isize))
+                                .map(|(x, y, ww, hh)| p.0 >= x && p.0 < x + ww && p.1 >= y && p.1 < y + hh)
+                                .unwrap_or(false);
+                            if !inside {
+                                let _ = w.hide();
+                                TOOLBAR_UP.store(false, Ordering::SeqCst);
+                            }
+                        }
+                    }
                     if app.state::<AppState>().settings().selection_toolbar {
                         let before = winutil::uia_selection();
                         *SEL_BEFORE.lock().unwrap() = (no, before);
