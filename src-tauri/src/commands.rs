@@ -751,6 +751,16 @@ pub fn open_tool(app: AppHandle, tool: String) {
         "ocr" => open_ocr(&app),
         "settings" | "main" => wm::show_main(&app),
         "workflows" => { wm::show_main(&app); let _ = app.emit("navigate", "flows"); }
+        "snap" => {
+            // back to the window the user came from, then snap mode for it
+            let hwnd = *app.state::<AppState>().last_hwnd.lock().unwrap();
+            let a2 = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(120));
+                winutil::focus(hwnd);
+                crate::snap::start(&a2, true);
+            });
+        }
         _ => {}
     }
 }
@@ -886,6 +896,79 @@ pub fn delete_everything(app: AppHandle, st: State<AppState>, store: State<Arc<C
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+// ================================================================ snap (window snapping)
+
+#[tauri::command]
+pub fn snap_start(app: AppHandle) {
+    crate::snap::start(&app, true);
+}
+
+#[tauri::command]
+pub fn snap_stop(app: AppHandle) {
+    crate::snap::stop(&app);
+}
+
+/// Column picker result: 2..9, or nothing when cancelled.
+#[tauri::command]
+pub fn snap_pick(app: AppHandle, cols: Option<i32>) {
+    crate::snap::picked(&app, cols);
+}
+
+#[tauri::command]
+pub fn snap_state() -> Value {
+    crate::snap::state()
+}
+
+/// Folder of the old separate Snapperr app, if it is installed.
+fn snapperr_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var("LOCALAPPDATA").ok()?;
+    ["Programs\\Snapperr", "Snapperr"]
+        .iter()
+        .map(|p| std::path::Path::new(&base).join(p))
+        .find(|d| d.join("Snapperr.exe").exists())
+}
+
+/// Is the old Snapperr app installed / running? (Both would react to Ctrl taps.)
+#[tauri::command]
+pub fn snapperr_status() -> Value {
+    let running = std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq Snapperr.exe", "/NH"])
+        .creation_flags_no_window()
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("snapperr.exe"))
+        .unwrap_or(false);
+    json!({ "installed": snapperr_dir().is_some(), "running": running })
+}
+
+#[tauri::command]
+pub fn snapperr_close() {
+    let _ = std::process::Command::new("taskkill").args(["/IM", "Snapperr.exe", "/F"]).creation_flags_no_window().output();
+}
+
+/// Open the old Snapperr's own uninstaller (the user confirms there).
+#[tauri::command]
+pub fn snapperr_uninstall() -> R<()> {
+    snapperr_close();
+    let dir = snapperr_dir().ok_or("Snapperr is not installed.")?;
+    let un = std::fs::read_dir(&dir)
+        .map_err(e)?
+        .filter_map(|f| f.ok().map(|f| f.path()))
+        .find(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase().starts_with("unins") && n.to_string_lossy().ends_with(".exe")).unwrap_or(false))
+        .ok_or("Couldn't find Snapperr's uninstaller. Remove it in Windows Settings → Apps.")?;
+    std::process::Command::new(un).spawn().map_err(e)?;
+    Ok(())
+}
+
+trait NoWindow {
+    fn creation_flags_no_window(&mut self) -> &mut Self;
+}
+impl NoWindow for std::process::Command {
+    fn creation_flags_no_window(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        self.creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+    }
 }
 
 // ================================================================ hotkey handlers

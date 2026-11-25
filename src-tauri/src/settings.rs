@@ -147,6 +147,11 @@ pub struct Settings {
     pub always_on_top: bool,
     pub tray_notice_shown: bool,
 
+    // ---- snap (window snapping, was Snapperr) ----
+    pub snap_enabled: bool,
+    pub snap_sounds: bool,
+    pub snap_seconds: u32,
+
     // ---- appearance ----
     pub theme: String,
     pub text_size: String,
@@ -232,6 +237,9 @@ impl Default for Settings {
             notify_on_tray: false,
             always_on_top: false,
             tray_notice_shown: false,
+            snap_enabled: true,
+            snap_sounds: true,
+            snap_seconds: 10,
             theme: "system".into(),
             text_size: "default".into(),
             language: "en".into(),

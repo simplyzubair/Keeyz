@@ -122,6 +122,12 @@ fn on_event(ev: rdev::Event) {
     }
     match ev.event_type {
         EventType::KeyPress(k) => {
+            if matches!(k, Key::ControlLeft | Key::ControlRight) {
+                crate::snap::ctrl_down();
+            } else if !matches!(k, Key::Unknown(0xE8) | Key::Unknown(0xFF)) {
+                // any other key (masking keys sent by other tools don't count) breaks a Ctrl tap
+                crate::snap::other_input();
+            }
             if !matches!(k, Key::ControlLeft | Key::ControlRight | Key::ShiftLeft | Key::ShiftRight | Key::Alt | Key::AltGr | Key::MetaLeft | Key::MetaRight) {
                 close_toolbar_soon();
             }
@@ -129,6 +135,11 @@ fn on_event(ev: rdev::Event) {
         }
         EventType::Wheel { .. } => close_toolbar_soon(),
         EventType::KeyRelease(k) => {
+            if matches!(k, Key::ControlLeft | Key::ControlRight) {
+                if let Some(app) = APP.get() {
+                    crate::snap::ctrl_up(app);
+                }
+            }
             let mut t = T.lock().unwrap();
             match k {
                 Key::ControlLeft | Key::ControlRight => t.ctrl = false,
@@ -139,6 +150,7 @@ fn on_event(ev: rdev::Event) {
             }
         }
         EventType::ButtonPress(Button::Left) => {
+            crate::snap::other_input();
             let p = winutil::cursor_pos();
             let mut t = T.lock().unwrap();
             reset(&mut t);
@@ -181,7 +193,10 @@ fn on_event(ev: rdev::Event) {
                 });
             }
         }
-        EventType::ButtonPress(_) => reset(&mut T.lock().unwrap()),
+        EventType::ButtonPress(_) => {
+            crate::snap::other_input();
+            reset(&mut T.lock().unwrap())
+        }
         EventType::ButtonRelease(Button::Left) => on_mouse_up(),
         _ => {}
     }

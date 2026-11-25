@@ -419,3 +419,91 @@ pub fn uia_document_text() -> Option<String> {
     }
     None
 }
+
+// ------------------------------------------------------------ window placement (Snap)
+
+/// Un-maximize / un-minimize a window so it can be moved.
+pub fn restore_window(hwnd: isize) {
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        if IsZoomed(h).as_bool() || IsIconic(h).as_bool() {
+            let _ = ShowWindow(h, SW_RESTORE);
+        }
+    }
+}
+
+/// Work area (left, top, right, bottom) of the monitor a window is on, without the taskbar.
+pub fn work_area_of(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    unsafe {
+        let m = MonitorFromWindow(HWND(hwnd as *mut _), MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(m, &mut info).as_bool() {
+            return None;
+        }
+        let r = info.rcWork;
+        Some((r.left, r.top, r.right, r.bottom))
+    }
+}
+
+/// Invisible resize borders around the window (left, top, right, bottom). Windows 10/11 draw
+/// windows a few pixels smaller than their real size; snapping uses the visible edges.
+fn invisible_borders(hwnd: isize) -> (i32, i32, i32, i32) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        let mut outer = RECT::default();
+        let mut vis = RECT::default();
+        if GetWindowRect(h, &mut outer).is_err()
+            || DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &mut vis as *mut _ as *mut _, std::mem::size_of::<RECT>() as u32).is_err()
+        {
+            return (0, 0, 0, 0);
+        }
+        let b = (vis.left - outer.left, vis.top - outer.top, outer.right - vis.right, outer.bottom - vis.bottom);
+        // only trust small, sane borders
+        if [b.0, b.1, b.2, b.3].iter().all(|v| (0..=16).contains(v)) { b } else { (0, 0, 0, 0) }
+    }
+}
+
+/// Place a window so its *visible* edges match (x, y, w, h).
+pub fn set_visible_rect(hwnd: isize, r: (i32, i32, i32, i32)) {
+    let (bl, bt, br, bb) = invisible_borders(hwnd);
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            None,
+            r.0 - bl,
+            r.1 - bt,
+            r.2 + bl + br,
+            r.3 + bt + bb,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Move by (dx, dy) and/or resize by (dw, dh), never smaller than `min`.
+pub fn nudge_window(hwnd: isize, dx: i32, dy: i32, dw: i32, dh: i32, min: i32) {
+    restore_window(hwnd);
+    let Some((x, y, w, h)) = window_rect(hwnd) else { return };
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(hwnd as *mut _),
+            None,
+            x + dx,
+            y + dy,
+            (w + dw).max(min),
+            (h + dh).max(min),
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Play a .wav file (blocks until it ends; call from a spare thread).
+pub fn play_wav(path: &str) {
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_FILENAME, SND_NODEFAULT};
+    let w: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = PlaySoundW(windows::core::PCWSTR(w.as_ptr()), None, SND_FILENAME | SND_NODEFAULT);
+    }
+}

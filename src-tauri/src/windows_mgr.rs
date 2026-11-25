@@ -18,6 +18,8 @@ pub const CLIPBOARD: Spec = Spec { label: "clipboard", page: "clipboard.html", w
 pub const VOICE: Spec = Spec { label: "voice", page: "voice.html", w: 460.0, h: 260.0, focus: true, transparent: false };
 pub const TOOLBAR: Spec = Spec { label: "toolbar", page: "toolbar.html", w: 380.0, h: 46.0, focus: false, transparent: true };
 pub const TYPING: Spec = Spec { label: "typing", page: "typing.html", w: 190.0, h: 40.0, focus: false, transparent: true };
+pub const SNAPBADGE: Spec = Spec { label: "snapbadge", page: "snap-badge.html", w: 132.0, h: 34.0, focus: false, transparent: true };
+pub const SNAPPICKER: Spec = Spec { label: "snappicker", page: "snap-picker.html", w: 280.0, h: 452.0, focus: true, transparent: true };
 pub const WORKFLOW: Spec = Spec { label: "workflow", page: "workflow-results.html", w: 640.0, h: 640.0, focus: true, transparent: false };
 
 pub fn get_or_create(app: &AppHandle, spec: &Spec) -> tauri::Result<WebviewWindow> {

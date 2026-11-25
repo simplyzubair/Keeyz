@@ -6,6 +6,7 @@ mod hook;
 mod ocr;
 mod prompts;
 mod settings;
+mod snap;
 mod state;
 mod windows_mgr;
 mod winutil;
@@ -88,13 +89,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let ver = MenuItem::with_id(app, "version", format!("Version {version}"), false, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", "Check for updates…", true, None::<&str>)?;
     let tour = MenuItem::with_id(app, "tour", "Run setup tour…", true, None::<&str>)?;
+    let snap_on = MenuItem::with_id(app, "snap", "Snap a window (or double-tap Ctrl)", true, None::<&str>)?;
     let pause = CheckMenuItem::with_id(app, "pause", "Pause typed triggers", true, false, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let sep = || PredefinedMenuItem::separator(app);
     let menu = Menu::with_items(
         app,
-        &[&open, &sep()?, &feedback, &help, &sep()?, &ver, &update, &sep()?, &tour, &pause, &settings, &sep()?, &quit],
+        &[&open, &sep()?, &snap_on, &sep()?, &feedback, &help, &sep()?, &ver, &update, &sep()?, &tour, &pause, &settings, &sep()?, &quit],
     )?;
     let _ = UPDATE_ITEM.set(update.clone());
     let pause2 = pause.clone();
@@ -121,6 +123,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 windows_mgr::show_main(app);
                 let _ = app.emit("navigate", "settings");
             }
+            "snap" => snap::start(app, true),
             "tour" => {
                 windows_mgr::show_main(app);
                 let _ = app.emit("run-tour", ());
@@ -189,6 +192,8 @@ pub fn run() {
                     let id = SHORTCUT_MAP.lock().unwrap().get(&sc.id()).cloned();
                     if let Some(id) = id {
                         commands::hotkey(app, &id);
+                    } else {
+                        snap::on_hotkey(app, sc.id());
                     }
                 })
                 .build(),
@@ -319,6 +324,13 @@ pub fn run() {
             commands::clip_ocr,
             commands::ocr_capture,
             commands::voice_transcribe,
+            commands::snap_start,
+            commands::snap_stop,
+            commands::snap_pick,
+            commands::snap_state,
+            commands::snapperr_status,
+            commands::snapperr_close,
+            commands::snapperr_uninstall,
             commands::voice_polish,
             commands::paste_into_last,
             commands::open_tool_cmd,

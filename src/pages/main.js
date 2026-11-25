@@ -2,11 +2,12 @@ import { boot, invoke, listen, win, $, $$, esc, h, getSettings, saveSettings, to
 import { TRANSLATE_LANGS, VOICE_LANGS } from './lib/langs.js';
 import { icon, actIcon } from './lib/icons.js';
 import logoUrl from './lib/logo.svg';
+import snapImg from './lib/snap.png';
 
 $$('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon, b.classList.contains('tb-btn') ? 15 : 19)));
 
 let S = await boot();
-const TITLES = { home: 'Home', flows: 'Workflows', ai: 'AI · Actions & style', settings: 'Settings', provider: 'AI Provider', help: 'Help & setup guide', feedback: 'Send feedback' };
+const TITLES = { home: 'Home', flows: 'Workflows', ai: 'AI · Actions & style', snap: 'Snap · windows', settings: 'Settings', provider: 'AI Provider', help: 'Help & setup guide', feedback: 'Send feedback' };
 let current = 'home';
 
 document.addEventListener('settings', (e) => { S = e.detail; render(current, true); });
@@ -38,7 +39,7 @@ function show(view) {
 
 function render(view, soft = false) {
   if (soft && document.activeElement?.closest('.view') && view !== 'home') return; // don't wipe what the user is typing
-  ({ home: renderHome, flows: renderFlows, ai: renderAI, settings: renderSettings, provider: renderProvider, help: renderHelp, feedback: renderFeedback })[view]?.();
+  ({ home: renderHome, flows: renderFlows, ai: renderAI, snap: renderSnap, settings: renderSettings, provider: renderProvider, help: renderHelp, feedback: renderFeedback })[view]?.();
 }
 
 // ============================================================ UPDATES
@@ -341,6 +342,61 @@ const row = (title, desc, control) => `<div class="set-row"><div class="s-text">
 const select = (key, opts) => `<select class="input" data-sel="${key}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(S[key]) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
 const seg = (key, opts) => `<div class="seg" data-seg="${key}">${opts.map(([v, l]) => `<button data-v="${v}">${l}</button>`).join('')}</div>`;
 const SHORTCUT_NAMES = { actions: 'Quick Actions', launcher: 'Launcher', clipboard: 'Clipboard History', voice: 'Voice Input', ocr: 'Text from Screen', undo: 'Undo last change', reply: 'Reply from screen', summarize: 'Summarize page', show_app: 'Open Keeyz' };
+
+// ============================================================ SNAP (window snapping, was Snapperr)
+// A tiny screen with the part the window goes to highlighted.
+const mini = (x, w, cols = 0) => `<span class="snap-mini">${cols ? Array.from({ length: cols }, (_, i) => `<i style="left:${(i / cols) * 100}%;width:${100 / cols}%" class="${i === 1 ? 'on' : 'col'}"></i>`).join('') : `<i class="on" style="left:${x * 100}%;width:${w * 100}%"></i>`}</span>`;
+const SNAP_LAYOUTS = [
+  ['Left third', 0, 1 / 3, 'Ctrl+←'], ['Center third', 1 / 3, 1 / 3, 'Ctrl+↓'], ['Right third', 2 / 3, 1 / 3, 'Ctrl+→'],
+  ['Left half', 0, 1 / 2, 'Ctrl+L'], ['Right half', 1 / 2, 1 / 2, 'Ctrl+;'], ['Full screen', 0, 1, 'Ctrl+F'],
+];
+const keys = (s) => s.split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join('');
+let snapTimer = 0;
+async function renderSnap() {
+  const el = $('#view-snap');
+  const [st, old] = await Promise.all([invoke('snap_state'), invoke('snapperr_status').catch(() => ({}))]);
+  el.innerHTML = `<div class="snap-hero">
+      <img src="${snapImg}" alt="" />
+      <div class="grow"><h1 style="margin:0 0 4px">Snap windows with your keyboard</h1>
+        <div class="muted">Double-tap <kbd>Ctrl</kbd> to turn on snap mode, then put the window where you want it. The keys only work while snap mode is on, so other apps keep them.</div></div>
+      <div class="snap-live ${st.on ? 'on' : ''}" id="snapLive"><span class="dot"></span><span id="snapLiveText">${st.on ? 'Snap mode on' : 'Snap mode off'}</span></div>
+    </div>
+    ${old.installed || old.running ? `<div class="snap-note"><span>${icon('info', 15)}</span><div class="grow"><b>The old Snapperr app is still ${old.running ? 'running' : 'installed'}.</b><div class="muted small">Snap is now part of Keeyz. With both running, every Ctrl double-tap happens twice.</div></div>
+      ${old.running ? '<button class="btn sm" id="oldClose">Close it</button>' : ''}${old.installed ? '<button class="btn sm primary" id="oldUninstall">Uninstall it</button>' : ''}</div>` : ''}
+    <div class="snap-steps">
+      <div class="snap-step"><span class="snap-taps"><kbd>Ctrl</kbd><kbd>Ctrl</kbd></span><div><b>Double-tap Ctrl</b><div class="muted small">Snap mode on for ${S.snap_seconds} seconds. A soft sound plays and a small counter shows at the top of the screen.</div></div></div>
+      <div class="snap-step"><span class="snap-taps"><kbd>Ctrl</kbd><kbd>Ctrl</kbd><kbd>Ctrl</kbd></span><div><b>Triple-tap Ctrl</b><div class="muted small">Pick 2 to 9 columns, then <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> puts the window in that column.</div></div></div>
+      <div class="snap-step"><span class="snap-taps"><kbd>Esc</kbd></span><div><b>Done</b><div class="muted small">Esc or another double-tap ends it. Every key press keeps it on a little longer.</div></div></div>
+    </div>
+    <h2 class="snap-h">Layouts</h2>
+    <div class="snap-grid">
+      ${SNAP_LAYOUTS.map(([name, x, w, k]) => `<div class="snap-card">${mini(x, w)}<b>${name}</b><span class="h-keys">${keys(k)}</span></div>`).join('')}
+      <div class="snap-card">${mini(0, 0, 4)}<b>Columns</b><span class="h-keys">${keys('Ctrl+1…9')}</span></div>
+      <div class="snap-card"><span class="snap-mini plain">${icon('move', 22)}</span><b>Move 20 px</b><span class="h-keys">${keys('Ctrl+Shift+Arrow')}</span></div>
+      <div class="snap-card"><span class="snap-mini plain">${icon('resize', 22)}</span><b>Resize 20 px</b><span class="h-keys">${keys('Ctrl+Shift+Alt+Arrow')}</span></div>
+    </div>
+    <p class="faint small" style="margin:8px 2px 20px">Hold the move or resize keys to keep going. Resize: Right / Down make it bigger, Left / Up smaller. Snaps to the visible edges of the window, on the screen it is on.</p>
+    <div class="set-group"><div class="g-title"><span class="g-ico">${icon('layout', 15)}</span>Snap settings</div>
+      ${row('Snap windows', 'Double-tap or triple-tap Ctrl to snap windows. Turn off if another app uses Ctrl taps.', sw('snap_enabled'))}
+      ${row('Soft sounds', 'A quiet sound when snap mode turns on and off.', sw('snap_sounds'))}
+      ${row('Snap mode stays on', 'Seconds after the last key press.', seg('snap_seconds', [[5, '5 s'], [10, '10 s'], [20, '20 s']]))}
+      ${row('Try it', 'Turns snap mode on for this window, so you can try the keys right here.', `<button class="btn sm" id="snapTry">${icon('play', 12)} Try it now</button>`)}
+    </div>
+    <p class="faint small">Windows doesn't let normal apps move windows of apps running as administrator, so those can't be snapped.</p>`;
+  bindSwitches(el);
+  $('#snapTry').onclick = () => invoke('snap_start');
+  $('#oldClose')?.addEventListener('click', async () => { await invoke('snapperr_close'); toast('Snapperr closed'); renderSnap(); });
+  $('#oldUninstall')?.addEventListener('click', async () => {
+    try { await invoke('snapperr_uninstall'); toast('Snapperr uninstaller opened', 'Confirm there to remove the old app.'); } catch (e) { toast("Couldn't uninstall Snapperr", String(e), true); }
+    setTimeout(() => current === 'snap' && renderSnap(), 8000);
+  });
+}
+listen('snap-state', (e) => {
+  const live = $('#snapLive');
+  if (!live) return;
+  live.classList.toggle('on', !!e.payload);
+  $('#snapLiveText').textContent = e.payload ? 'Snap mode on' : 'Snap mode off';
+});
 
 async function renderSettings() {
   const el = $('#view-settings');
@@ -676,6 +732,7 @@ function renderHelp() {
     ${card('mic', `Voice typing · ${kbd(sc.voice)}`, 'Dictate in 50+ languages. When you stop: Insert (cleaned up), Insert as heard, Continue, or send to Quick Actions.')}
     ${card('clipboard', `Clipboard history · ${kbd(sc.clipboard)}`, 'Search, pin, paste with 1–9, or run AI on any past clip. Images are kept too and can be read with OCR.')}
     ${card('scan', `Text from screen · ${kbd(sc.ocr)}`, 'Drag over text you can\'t select (subtitles, images, PDFs, error dialogs). Copy it or send it to Quick Actions. Uses the built-in Windows OCR, offline.')}
+    ${card('layout', 'Snap windows · <kbd>Ctrl</kbd><kbd>Ctrl</kbd>', 'Double-tap Ctrl, then Ctrl + ← ↓ → for thirds, Ctrl + L / ; for halves, Ctrl + F for full screen. Triple-tap Ctrl to pick 2–9 columns. Esc ends it. More on the Snap page.')}
     ${card('undo', `Undo · ${kbd(sc.undo)}`, 'Undo the last AI change in your app. History keeps the last 20 changes.')}
     ${card('flows', 'Workflows', 'Chain steps so each feeds the next (Meeting notes → Action items → Follow-up email). Build your own in Flows.')}
     </div><div class="row" style="margin-top:16px"><button class="btn" id="showWelcome">Show welcome again</button></div>`;
@@ -704,7 +761,8 @@ function welcome(force = false) {
       <div class="welcome-step"><span class="n">3</span><div><b>Or type it: <i>your text ${w} make it shorter</i> + space twice</b><div class="muted small">Works in every app. Esc cancels.</div></div></div>
       <div class="welcome-step"><span class="n">4</span><div><b>Or just select text</b><div class="muted small">A small toolbar appears next to your selection with the right buttons for it. ⋯ opens every action.</div></div></div>
       <div class="welcome-step"><span class="n">5</span><div><b>Reply with one key: ${kbd(sc.reply || 'Ctrl+Shift+Y')}</b><div class="muted small">Click in the reply box of any chat or mail and press it. Keeyz reads the conversation on screen and writes the answer. Type a few words first to steer it.</div></div></div>
-      <div class="welcome-step"><span class="n">6</span><div><b>More tools</b><div class="muted small">Launcher ${kbd(sc.launcher)} · Voice ${kbd(sc.voice)} · Clipboard ${kbd(sc.clipboard)} · Text from screen ${kbd(sc.ocr)}</div></div></div>
+      <div class="welcome-step"><span class="n">6</span><div><b>Snap windows: double-tap <kbd>Ctrl</kbd></b><div class="muted small">Then Ctrl + ← ↓ → for thirds, Ctrl + L / ; for halves, Ctrl + F for full screen. Triple-tap for columns.</div></div></div>
+      <div class="welcome-step"><span class="n">7</span><div><b>More tools</b><div class="muted small">Launcher ${kbd(sc.launcher)} · Voice ${kbd(sc.voice)} · Clipboard ${kbd(sc.clipboard)} · Text from screen ${kbd(sc.ocr)}</div></div></div>
     </div>
     <div class="row"><span class="faint small">Keeyz stays in your system tray so shortcuts work everywhere.</span><span class="spacer"></span>
       <button class="btn" id="wLater">Later</button><button class="btn grad" id="wKey">Add my AI key</button></div>`);

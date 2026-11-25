@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Snap</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    html, body { background: transparent; overflow: hidden; }
+    /* Small, quiet, see-through countdown. It never takes focus and clicks pass through it. */
+    .pill { margin: 3px auto; width: fit-content; height: 26px; display: flex; align-items: center; gap: 7px; padding: 0 11px; border-radius: 99px;
+      background: rgba(28, 27, 26, .82); color: #ecebe8; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 6px 16px -8px rgba(0,0,0,.4);
+      font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; animation: pop .16s var(--ease); }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #7cc0b1; }
+    .cols { display: inline-flex; gap: 1.5px; height: 10px; }
+    .cols i { width: 3px; border-radius: 1px; background: #7cc0b1; opacity: .85; }
+    .bar { width: 34px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; }
+    .bar b { display: block; height: 100%; background: #7cc0b1; transition: width .9s linear; }
+  </style>
+</head>
+<body>
+  <div class="pill"><span class="dot"></span><span id="what">snap</span><span class="bar"><b id="fill"></b></span><span id="left"></span></div>
+  <script type="module">
+    import { boot, listen, $ } from './lib/core.js';
+    await boot();
+    let full = 10, prev = 0;
+    listen('snap-badge', (e) => {
+      const { left, cols } = e.payload;
+      if (left > prev) full = left; // (re)started: the bar is full again
+      prev = left;
+      $('#what').innerHTML = cols ? `<span class="cols">${'<i></i>'.repeat(cols)}</span>` : 'snap';
+      $('#left').textContent = left;
+      $('#fill').style.width = `${Math.max(0, Math.min(100, (left / full) * 100))}%`;
+    });
+  </script>
+</body>
+</html>

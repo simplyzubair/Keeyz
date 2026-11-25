@@ -49,6 +49,7 @@ function draw() {
     ['tool', 'voice', 'Voice input', 'mic', S.shortcuts.voice],
     ['tool', 'clipboard', 'Clipboard history', 'clipboard', S.shortcuts.clipboard],
     ['tool', 'ocr', 'Text from screen', 'scan', S.shortcuts.ocr],
+    ['tool', 'snap', 'Snap window (Ctrl Ctrl)', 'layout', ''],
     ['tool', 'summarize', 'Summarize page', 'fileText', S.shortcuts.summarize],
     ['tool', 'settings', 'Settings', 'settings', S.shortcuts.show_app],
   ].map(([kind, id, name, ic, key]) => ({ kind, id, name, ic, meta: key }));

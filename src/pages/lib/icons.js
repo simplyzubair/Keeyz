@@ -1,5 +1,8 @@
 // Line icons (24×24, stroke). Usage: icon('home'), icon('star', 14)
 const P = {
+  layout: '<rect x="2.5" y="4" width="19" height="16" rx="2"/><path d="M9 4v16M15 4v16"/>',
+  move: '<path d="M12 2.5v19M2.5 12h19M9 5.5l3-3 3 3M9 18.5l3 3 3-3M5.5 9l-3 3 3 3M18.5 9l3 3-3 3"/>',
+  resize: '<path d="M14 3.5h6.5V10M10 20.5H3.5V14M20.5 3.5 13.5 10.5M3.5 20.5l7-7"/>',
   home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/>',
   flows: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 6h7M6 8.5v3A3.5 3.5 0 0 0 9.5 15H15"/>',
   sparkles: '<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
