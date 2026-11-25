@@ -80,10 +80,11 @@
       armHide();
     });
     // hide when the user clicks somewhere else (global mouse hook)
-    listen('global-click', async (e) => {
-      const pos = await win.outerPosition(), sz = await win.outerSize();
-      const { x, y } = e.payload;
-      if (x < pos.x || y < pos.y || x > pos.x + sz.width || y > pos.y + sz.height) if (!busy) invoke('hide_me');
+    // (a click elsewhere closes the toolbar: Keeyz checks that itself, see hook.rs)
+    listen('toolbar-editable', (e) => {
+      if (e.payload.text !== text || $('#bar').classList.contains('hidden')) return;
+      pickButtons({ editable: e.payload.editable });
+      fit($('#bar'));
     });
     listen('escape-pressed', () => invoke('hide_me'));
 

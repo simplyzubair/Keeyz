@@ -842,6 +842,7 @@ pub fn launcher_action(app: AppHandle, st: State<AppState>, kind: String, id: St
 
 #[tauri::command]
 pub fn hide_me(win: WebviewWindow) {
+    crate::hook::dbg_log!("[window] hide_me from {}", win.label());
     if let Ok(h) = win.hwnd() {
         winutil::hide_native(h.0 as isize);
     }

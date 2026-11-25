@@ -121,7 +121,9 @@ pub fn show(app: &AppHandle, spec: &Spec, how: Place) -> Option<WebviewWindow> {
     Some(w)
 }
 
+#[track_caller]
 pub fn hide(app: &AppHandle, label: &str) {
+    crate::hook::dbg_log!("[window] hide {label} (from {})", std::panic::Location::caller());
     // Windows shown with show_no_activate are unknown to Tauri, so its hide() alone can do
     // nothing. Hide through Windows directly too.
     if let Some(h) = hwnd_of(label) {
@@ -184,14 +186,20 @@ pub fn show_toolbar(app: &AppHandle, text: String, editable: bool, hwnd: isize, 
         c.auto_action.clear();
     }
     let app2 = app.clone();
+    crate::hook::dbg_log!("[toolbar] show queued at {pos:?}");
     let _ = app.run_on_main_thread(move || {
+        crate::hook::dbg_log!("[toolbar] show running on main thread");
         if let Some(w) = get_or_create(&app2, &TOOLBAR).ok() {
             let _ = w.set_size(tauri::LogicalSize::new(TOOLBAR.w, TOOLBAR.h));
             place(&app2, &w, Place::Near(pos.0, pos.1));
             let _ = w.emit("toolbar-show", serde_json::json!({ "text": text, "editable": editable }));
             // show next to the selection without stealing focus (the selection must stay active)
             match w.hwnd() {
-                Ok(h) => crate::winutil::show_no_activate(h.0 as isize),
+                Ok(h) => {
+                    crate::hook::TOOLBAR_SHOWN_MS.store(crate::hook::now_ms(), std::sync::atomic::Ordering::SeqCst);
+                    crate::winutil::show_no_activate(h.0 as isize);
+                    crate::hook::dbg_log!("[toolbar] shown: visible={} rect={:?}", crate::winutil::is_visible(h.0 as isize), crate::winutil::window_rect(h.0 as isize));
+                }
                 Err(_) => {
                     let _ = w.show();
                 }

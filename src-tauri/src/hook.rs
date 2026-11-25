@@ -15,6 +15,23 @@ use tauri::{AppHandle, Emitter, Manager};
 
 static APP: OnceCell<AppHandle> = OnceCell::new();
 
+/// When the selection toolbar last appeared (ms since 1970). Clicks and keys from before that
+/// moment are old news (the hook queue can lag a little) and must not close it.
+pub static TOOLBAR_SHOWN_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Last mouse position, kept by the hook itself (mouse moves never go through the queue).
+static MOUSE_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static MOUSE_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+pub fn now_ms() -> u64 {
+    ms(std::time::SystemTime::now())
+}
+fn ms(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+fn mouse_pos() -> (i32, i32) {
+    (MOUSE_X.load(Ordering::SeqCst), MOUSE_Y.load(Ordering::SeqCst))
+}
+
 /// True while the selection toolbar may be on screen (typing or scrolling closes it).
 pub static TOOLBAR_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Text that was already selected when the mouse button went down. If a drag ends with the
@@ -24,10 +41,14 @@ static SEL_BEFORE: Lazy<Mutex<(u64, Option<String>, Option<Instant>, bool)>> = L
 static CLICK_NO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Close the toolbar when the user types or scrolls somewhere else (never blocks the hook).
-fn close_toolbar_soon() {
+fn close_toolbar_soon(at: std::time::SystemTime) {
+    if ms(at) < TOOLBAR_SHOWN_MS.load(Ordering::SeqCst) {
+        return; // happened before the toolbar appeared
+    }
     if !TOOLBAR_UP.swap(false, Ordering::SeqCst) {
         return;
     }
+    dbg_log!("[toolbar] closing: key or wheel at {} (shown at {})", ms(at), TOOLBAR_SHOWN_MS.load(Ordering::SeqCst));
     let Some(app) = APP.get().cloned() else { return };
     std::thread::spawn(move || {
         // typing inside the toolbar's own language search must not close it
@@ -95,6 +116,17 @@ pub fn start(app: AppHandle) {
             if INJECTING.load(Ordering::SeqCst) {
                 return; // Keeyz's own key presses
             }
+            if let EventType::MouseMove { x, y } = ev.event_type {
+                MOUSE_X.store(x as i32, Ordering::SeqCst);
+                MOUSE_Y.store(y as i32, Ordering::SeqCst);
+                return; // far too many to queue, and only the position matters
+            }
+            if matches!(ev.event_type, EventType::ButtonPress(_) | EventType::ButtonRelease(_)) {
+                // the cursor can move without move events (e.g. moved by a program)
+                let (x, y) = winutil::cursor_pos();
+                MOUSE_X.store(x, Ordering::SeqCst);
+                MOUSE_Y.store(y, Ordering::SeqCst);
+            }
             let _ = tx.send(ev);
         });
         if let Err(e) = res {
@@ -129,6 +161,7 @@ fn reset(t: &mut Typed) {
 }
 
 fn on_event(ev: rdev::Event) {
+    let at = ev.time;
     match ev.event_type {
         EventType::KeyPress(k) => {
             if matches!(k, Key::ControlLeft | Key::ControlRight) {
@@ -138,11 +171,11 @@ fn on_event(ev: rdev::Event) {
                 crate::snap::other_input();
             }
             if !matches!(k, Key::ControlLeft | Key::ControlRight | Key::ShiftLeft | Key::ShiftRight | Key::Alt | Key::AltGr | Key::MetaLeft | Key::MetaRight) {
-                close_toolbar_soon();
+                close_toolbar_soon(at);
             }
             on_key(k, ev.name)
         }
-        EventType::Wheel { .. } => close_toolbar_soon(),
+        EventType::Wheel { .. } => close_toolbar_soon(at),
         EventType::KeyRelease(k) => {
             if matches!(k, Key::ControlLeft | Key::ControlRight) {
                 if let Some(app) = APP.get() {
@@ -160,7 +193,8 @@ fn on_event(ev: rdev::Event) {
         }
         EventType::ButtonPress(Button::Left) => {
             crate::snap::other_input();
-            let p = winutil::cursor_pos();
+            let p = mouse_pos();
+            let pressed_ms = ms(at);
             let mut t = T.lock().unwrap();
             reset(&mut t);
             t.down_at = Some((p, Instant::now()));
@@ -172,11 +206,13 @@ fn on_event(ev: rdev::Event) {
                 std::thread::spawn(move || {
                     // a click anywhere outside the selection toolbar closes it
                     if let Some(h) = crate::windows_mgr::hwnd_of("toolbar") {
-                        if winutil::is_visible(h) {
+                        // only clicks made while it was on screen count
+                        if winutil::is_visible(h) && pressed_ms >= TOOLBAR_SHOWN_MS.load(Ordering::SeqCst) {
                             let inside = winutil::window_rect(h)
                                 .map(|(x, y, ww, hh)| p.0 >= x && p.0 < x + ww && p.1 >= y && p.1 < y + hh)
                                 .unwrap_or(false);
                             if !inside {
+                                dbg_log!("[toolbar] closing: click at {p:?} pressed {pressed_ms} (shown at {})", TOOLBAR_SHOWN_MS.load(Ordering::SeqCst));
                                 crate::windows_mgr::hide(&app, "toolbar");
                                 TOOLBAR_UP.store(false, Ordering::SeqCst);
                             }
@@ -299,7 +335,7 @@ fn shifted(s: &str) -> String {
 }
 
 fn on_mouse_up() {
-    let p = winutil::cursor_pos();
+    let p = mouse_pos();
     let released = Instant::now();
     let (dragged, dbl) = {
         let mut t = T.lock().unwrap();
@@ -343,8 +379,19 @@ fn on_mouse_up() {
                 return;
             }
             if text.chars().count() >= 2 {
-                let editable = winutil::focused_editable();
-                crate::windows_mgr::show_toolbar(&app, text, editable, fg, p);
+                // "Is this a text box?" can be slow in some apps: show the toolbar at once and
+                // switch its buttons when the answer comes in.
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(winutil::focused_editable());
+                });
+                let quick = rx.recv_timeout(Duration::from_millis(200)).ok();
+                crate::windows_mgr::show_toolbar(&app, text.clone(), quick.unwrap_or(false), fg, p);
+                if quick.is_none() {
+                    if let Ok(true) = rx.recv_timeout(Duration::from_secs(4)) {
+                        let _ = app.emit_to("toolbar", "toolbar-editable", serde_json::json!({ "text": text, "editable": true }));
+                    }
+                }
             }
         }
     });
