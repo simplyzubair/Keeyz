@@ -114,3 +114,16 @@ impl AppState {
         item
     }
 }
+
+/// KEEYZ_DEBUG=1 turns on the debug log in release builds too (for finding problems on a real PC).
+pub fn debug_on() -> bool {
+    static ON: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| std::env::var("KEEYZ_DEBUG").map(|v| v == "1").unwrap_or(false));
+    *ON
+}
+
+pub fn debug_line(line: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("keeyz-debug.log")) {
+        let _ = writeln!(f, "{} {line}", chrono::Local::now().format("%H:%M:%S%.3f"));
+    }
+}

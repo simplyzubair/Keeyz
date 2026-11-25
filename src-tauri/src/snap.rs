@@ -115,16 +115,21 @@ impl Taps {
 /// From the keyboard hook: Ctrl went down.
 pub fn ctrl_down() {
     TAPS.lock().unwrap().down(Instant::now());
+    crate::hook::dbg_log!("[snap] ctrl down");
 }
 
 /// From the keyboard hook: Ctrl came up. Starts a short wait to tell a double from a triple tap.
 pub fn ctrl_up(app: &AppHandle) {
-    let Some(gen) = TAPS.lock().unwrap().up(Instant::now()) else { return };
+    let gen = TAPS.lock().unwrap().up(Instant::now());
+    crate::hook::dbg_log!("[snap] ctrl up, counts as tap: {}", gen.is_some());
+    let Some(gen) = gen else { return };
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(TAP_WAIT);
         let taps = TAPS.lock().unwrap().finish(gen);
-        if taps < 2 || !app.state::<AppState>().settings().snap_enabled {
+        let enabled = app.state::<AppState>().settings().snap_enabled;
+        crate::hook::dbg_log!("[snap] taps finished: {taps} (snap enabled: {enabled}, on: {})", is_on());
+        if taps < 2 || !enabled {
             return;
         }
         if taps == 2 {
@@ -147,6 +152,7 @@ pub fn is_on() -> bool {
 // ------------------------------------------------------------------ snap mode
 
 pub fn start(app: &AppHandle, sound: bool) {
+    crate::hook::dbg_log!("[snap] snap mode on");
     let secs = seconds(app);
     LEFT.store(secs, Ordering::SeqCst);
     ON.store(true, Ordering::SeqCst);
@@ -176,6 +182,7 @@ pub fn stop(app: &AppHandle) {
     if !ON.swap(false, Ordering::SeqCst) {
         return;
     }
+    crate::hook::dbg_log!("[snap] snap mode off");
     RUN.fetch_add(1, Ordering::SeqCst);
     unregister_keys(app);
     crate::windows_mgr::hide(app, "snapbadge");
@@ -203,39 +210,117 @@ fn chime(app: &AppHandle, name: &str) {
 
 // ------------------------------------------------------------------ keys (only while on)
 
-pub fn key_list(cols: i32) -> Vec<(u8, u16, Cmd)> {
-    const LEFT_K: u16 = 0x25;
-    const UP: u16 = 0x26;
-    const RIGHT: u16 = 0x27;
-    const DOWN: u16 = 0x28;
-    let cs = CTRL | SHIFT;
-    let csa = CTRL | SHIFT | ALT;
-    let mut v = vec![
-        (0, 0x1B, Cmd::Off), // Esc
-        (CTRL, LEFT_K, Cmd::Snap(0.0, 1.0 / 3.0)),
-        (CTRL, DOWN, Cmd::Snap(1.0 / 3.0, 1.0 / 3.0)),
-        (CTRL, RIGHT, Cmd::Snap(2.0 / 3.0, 1.0 / 3.0)),
-        (CTRL, 0x4C, Cmd::Snap(0.0, 0.5)), // L
-        (CTRL, 0xBA, Cmd::Snap(0.5, 0.5)), // ;
-        (CTRL, 0x46, Cmd::Snap(0.0, 1.0)), // F
-        (cs, LEFT_K, Cmd::Move(-STEP, 0)),
-        (cs, RIGHT, Cmd::Move(STEP, 0)),
-        (cs, UP, Cmd::Move(0, -STEP)),
-        (cs, DOWN, Cmd::Move(0, STEP)),
-        (csa, LEFT_K, Cmd::Resize(-STEP, 0)),
-        (csa, RIGHT, Cmd::Resize(STEP, 0)),
-        (csa, UP, Cmd::Resize(0, -STEP)),
-        (csa, DOWN, Cmd::Resize(0, STEP)),
-    ];
+/// "Ctrl+Shift+ArrowLeft" -> (modifiers, virtual key). None for keys we can't read.
+pub fn parse_accel(accel: &str) -> Option<(u8, u16)> {
+    let mut mods = 0u8;
+    let mut key = None;
+    for part in accel.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => mods |= CTRL,
+            "shift" => mods |= SHIFT,
+            "alt" => mods |= ALT,
+            _ => key = Some(vk_of(part)?),
+        }
+    }
+    // a lone ";" splits oddly ("Ctrl+;" is fine, but "Ctrl++" would be "+"), so handle "+" too
+    if accel.ends_with("++") {
+        key = Some(0xBB);
+    }
+    Some((mods, key?))
+}
+
+fn vk_of(k: &str) -> Option<u16> {
+    let up = k.to_ascii_uppercase();
+    let b = up.as_bytes();
+    if b.len() == 1 && (b[0].is_ascii_uppercase() || b[0].is_ascii_digit()) {
+        return Some(b[0] as u16);
+    }
+    if let Some(n) = up.strip_prefix('F').and_then(|n| n.parse::<u16>().ok()) {
+        if (1..=24).contains(&n) {
+            return Some(0x6F + n);
+        }
+    }
+    if let Some(n) = up.strip_prefix("NUMPAD").and_then(|n| n.parse::<u16>().ok()) {
+        if n <= 9 {
+            return Some(0x60 + n);
+        }
+    }
+    Some(match up.as_str() {
+        "ARROWLEFT" | "LEFT" => 0x25,
+        "ARROWUP" | "UP" => 0x26,
+        "ARROWRIGHT" | "RIGHT" => 0x27,
+        "ARROWDOWN" | "DOWN" => 0x28,
+        "ESCAPE" | "ESC" => 0x1B,
+        "SPACE" => 0x20,
+        "ENTER" => 0x0D,
+        "TAB" => 0x09,
+        "BACKSPACE" => 0x08,
+        "HOME" => 0x24,
+        "END" => 0x23,
+        "PAGEUP" => 0x21,
+        "PAGEDOWN" => 0x22,
+        "INSERT" => 0x2D,
+        "DELETE" => 0x2E,
+        ";" => 0xBA,
+        "=" => 0xBB,
+        "," => 0xBC,
+        "-" => 0xBD,
+        "." => 0xBE,
+        "/" => 0xBF,
+        "`" => 0xC0,
+        "[" => 0xDB,
+        "\\" => 0xDC,
+        "]" => 0xDD,
+        "'" => 0xDE,
+        _ => return None,
+    })
+}
+
+/// What each snap key id does.
+fn cmd_of(id: &str) -> Option<Cmd> {
+    Some(match id {
+        "left_third" => Cmd::Snap(0.0, 1.0 / 3.0),
+        "center_third" => Cmd::Snap(1.0 / 3.0, 1.0 / 3.0),
+        "right_third" => Cmd::Snap(2.0 / 3.0, 1.0 / 3.0),
+        "left_half" => Cmd::Snap(0.0, 0.5),
+        "right_half" => Cmd::Snap(0.5, 0.5),
+        "full" => Cmd::Snap(0.0, 1.0),
+        "move_left" => Cmd::Move(-STEP, 0),
+        "move_right" => Cmd::Move(STEP, 0),
+        "move_up" => Cmd::Move(0, -STEP),
+        "move_down" => Cmd::Move(0, STEP),
+        "narrower" => Cmd::Resize(-STEP, 0),
+        "wider" => Cmd::Resize(STEP, 0),
+        "shorter" => Cmd::Resize(0, -STEP),
+        "taller" => Cmd::Resize(0, STEP),
+        "off" => Cmd::Off,
+        _ => return None,
+    })
+}
+
+/// The keys caught in snap mode, from the user's settings (missing ones use the defaults).
+pub fn key_list(cols: i32, keys: &std::collections::HashMap<String, String>) -> Vec<(u8, u16, Cmd)> {
+    let defaults = crate::settings::default_snap_keys();
+    let get = |id: &str| keys.get(id).filter(|v| !v.trim().is_empty()).or_else(|| defaults.get(id)).cloned().unwrap_or_default();
+    let mut v = vec![];
+    let mut ids: Vec<&String> = defaults.keys().collect();
+    ids.sort();
+    for id in ids {
+        if let (Some(cmd), Some((m, vk))) = (cmd_of(id), parse_accel(&get(id))) {
+            v.push((m, vk, cmd));
+        }
+    }
+    // columns: the chosen modifiers + 1…9 (top row and number pad)
+    let col_mods = parse_accel(&format!("{}+1", get("columns"))).map(|x| x.0).unwrap_or(CTRL);
     for k in 1..=cols.clamp(0, 9) {
-        v.push((CTRL, 0x30 + k as u16, Cmd::Column(k))); // Ctrl+1…9 (top row)
-        v.push((CTRL, 0x60 + k as u16, Cmd::Column(k))); // Ctrl+1…9 (number pad)
+        v.push((col_mods, 0x30 + k as u16, Cmd::Column(k)));
+        v.push((col_mods, 0x60 + k as u16, Cmd::Column(k)));
     }
     v
 }
 
 fn register_keys(app: &AppHandle) {
-    *ACTIVE_KEYS.lock().unwrap() = key_list(COLS.load(Ordering::SeqCst));
+    *ACTIVE_KEYS.lock().unwrap() = key_list(COLS.load(Ordering::SeqCst), &app.state::<AppState>().settings().snap_keys);
     if HOOK_THREAD.load(Ordering::SeqCst) != 0 {
         return; // hook already running; it reads the new key list
     }
@@ -289,6 +374,7 @@ unsafe extern "system" fn key_hook(code: i32, w: windows::Win32::Foundation::WPA
             | (if winutil::is_down(0x12) { ALT } else { 0 });
         let hit = ACTIVE_KEYS.lock().ok().and_then(|keys| keys.iter().find(|(m, v, _)| *m == mods && *v as u32 == k.vkCode).map(|x| x.2));
         if let Some(cmd) = hit {
+            crate::hook::dbg_log!("[snap] key caught: {cmd:?}");
             // Ctrl+key is not a Ctrl tap (the other hook never sees this key)
             if let Ok(mut t) = TAPS.lock() {
                 t.other();
@@ -327,12 +413,9 @@ fn target(app: &AppHandle) -> Option<isize> {
     if fg == 0 {
         return None;
     }
-    for label in ["snapbadge", "snappicker"] {
-        if let Some(w) = app.get_webview_window(label) {
-            if w.hwnd().map(|h| h.0 as isize == fg).unwrap_or(false) {
-                return None;
-            }
-        }
+    let _ = app;
+    if ["snapbadge", "snappicker"].iter().any(|l| crate::windows_mgr::hwnd_of(l) == Some(fg)) {
+        return None;
     }
     Some(fg)
 }
@@ -533,13 +616,41 @@ mod tests {
     }
 
     #[test]
+    fn default_keys_and_custom_keys() {
+        let d = crate::settings::default_snap_keys();
+        let keys = key_list(0, &d);
+        let find = |m: u8, vk: u16| keys.iter().find(|k| k.0 == m && k.1 == vk).map(|k| k.2);
+        assert_eq!(find(CTRL, 0x25), Some(Cmd::Snap(0.0, 1.0 / 3.0)), "Ctrl+Left");
+        assert_eq!(find(CTRL, 0xBA), Some(Cmd::Snap(0.5, 0.5)), "Ctrl+;");
+        assert_eq!(find(CTRL, 0x46), Some(Cmd::Snap(0.0, 1.0)), "Ctrl+F");
+        assert_eq!(find(CTRL | SHIFT, 0x27), Some(Cmd::Move(STEP, 0)));
+        assert_eq!(find(CTRL | SHIFT | ALT, 0x25), Some(Cmd::Resize(-STEP, 0)));
+        assert_eq!(find(0, 0x1B), Some(Cmd::Off), "Esc");
+        assert_eq!(keys.len(), 15);
+        // the user changes left half to Alt+1 and columns to Alt
+        let mut mine = d.clone();
+        mine.insert("left_half".into(), "Alt+1".into());
+        mine.insert("columns".into(), "Alt".into());
+        let keys = key_list(3, &mine);
+        assert!(keys.iter().any(|k| k.0 == ALT && k.1 == 0x31 && k.2 == Cmd::Snap(0.0, 0.5)));
+        assert!(!keys.iter().any(|k| k.0 == CTRL && k.1 == 0x4C), "old Ctrl+L is gone");
+        assert!(keys.iter().any(|k| k.0 == ALT && k.1 == 0x32 && k.2 == Cmd::Column(2)));
+        // parsing
+        assert_eq!(parse_accel("Ctrl+Shift+ArrowUp"), Some((CTRL | SHIFT, 0x26)));
+        assert_eq!(parse_accel("Alt+F5"), Some((ALT, 0x74)));
+        assert_eq!(parse_accel("Ctrl+'"), Some((CTRL, 0xDE)));
+        assert_eq!(parse_accel("Ctrl+Whatever"), None);
+    }
+
+    #[test]
     fn columns_register_only_what_was_picked() {
-        let cols = |n| key_list(n).iter().filter(|(_, _, c)| matches!(c, Cmd::Column(_))).count();
+        let none = std::collections::HashMap::new();
+        let cols = |n| key_list(n, &none).iter().filter(|(_, _, c)| matches!(c, Cmd::Column(_))).count();
         assert_eq!(cols(0), 0);
         assert_eq!(cols(4), 8, "top row + number pad");
         assert_eq!(cols(9), 18);
         // every key + modifier combination means one thing only
-        let keys = key_list(9);
+        let keys = key_list(9, &none);
         for (i, a) in keys.iter().enumerate() {
             assert!(!keys[i + 1..].iter().any(|b| a.0 == b.0 && a.1 == b.1), "duplicate key {a:?}");
         }

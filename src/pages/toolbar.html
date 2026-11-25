@@ -68,7 +68,7 @@
     const panelOpen = () => !$('#panel').classList.contains('hidden');
     function armHide() {
       clearTimeout(hideTimer);
-      hideTimer = setTimeout(() => { if (!hovering && !busy && !panelOpen()) win.hide(); }, 4000);
+      hideTimer = setTimeout(() => { if (!hovering && !busy && !panelOpen()) invoke('hide_me'); }, 4000);
     }
     document.body.addEventListener('mouseenter', () => { hovering = true; clearTimeout(hideTimer); });
     document.body.addEventListener('mouseleave', () => { hovering = false; armHide(); });
@@ -83,9 +83,9 @@
     listen('global-click', async (e) => {
       const pos = await win.outerPosition(), sz = await win.outerSize();
       const { x, y } = e.payload;
-      if (x < pos.x || y < pos.y || x > pos.x + sz.width || y > pos.y + sz.height) if (!busy) win.hide();
+      if (x < pos.x || y < pos.y || x > pos.x + sz.width || y > pos.y + sz.height) if (!busy) invoke('hide_me');
     });
-    listen('escape-pressed', () => win.hide());
+    listen('escape-pressed', () => invoke('hide_me'));
 
     // Show the buttons that fit the selection: your own text → rewrite tools,
     // a word or two → define, long text → summarize / key points, else explain / reply.
@@ -113,7 +113,7 @@
     $$('#bar button').forEach((b) => (b.onclick = () => {
       clearTimeout(hideTimer);
       const a = b.dataset.a;
-      if (a === 'more') { win.hide(); return selectedText().then((t) => invoke('open_actions_with', { text: t, source: 'toolbar', action: null })); }
+      if (a === 'more') { invoke('hide_me'); return selectedText().then((t) => invoke('open_actions_with', { text: t, source: 'toolbar', action: null })); }
       if (a === 'translate') return showLangBar();
       run(a);
     }));
@@ -178,10 +178,10 @@
       } catch (e) { $('#pBody').innerHTML = `<span style="color:var(--danger)">${esc(e)}</span>`; }
       busy = false;
     }
-    $('#pClose').onclick = () => win.hide();
-    $('#pCopy').onclick = async () => { await invoke('copy_text', { text: result }); toast('Copied'); win.hide(); };
+    $('#pClose').onclick = () => invoke('hide_me');
+    $('#pCopy').onclick = async () => { await invoke('copy_text', { text: result }); toast('Copied'); invoke('hide_me'); };
     $('#pReplace').onclick = () => invoke('insert_result', { text: result, mode: current.output === 'add' ? 'add' : 'replace', original: text, action: current.action });
-    $('#pMore').onclick = () => { win.hide(); invoke('open_actions_with', { text: result || text, source: 'toolbar', action: null }); };
+    $('#pMore').onclick = () => { invoke('hide_me'); invoke('open_actions_with', { text: result || text, source: 'toolbar', action: null }); };
     $('#pLang').onclick = pickLang;
   </script>
 </body>

@@ -22,8 +22,26 @@ pub const SNAPBADGE: Spec = Spec { label: "snapbadge", page: "snap-badge.html", 
 pub const SNAPPICKER: Spec = Spec { label: "snappicker", page: "snap-picker.html", w: 280.0, h: 452.0, focus: true, transparent: true };
 pub const WORKFLOW: Spec = Spec { label: "workflow", page: "workflow-results.html", w: 640.0, h: 640.0, focus: true, transparent: false };
 
+/// Windows handles of our popup windows, so other threads can show / hide / compare them
+/// without waiting for the (sometimes busy) main thread.
+static HWNDS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, isize>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+pub fn hwnd_of(label: &str) -> Option<isize> {
+    HWNDS.lock().unwrap().get(label).copied()
+}
+
+fn remember(w: &WebviewWindow) {
+    if let Ok(h) = w.hwnd() {
+        HWNDS.lock().unwrap().insert(w.label().to_string(), h.0 as isize);
+    }
+}
+
 pub fn get_or_create(app: &AppHandle, spec: &Spec) -> tauri::Result<WebviewWindow> {
     if let Some(w) = app.get_webview_window(spec.label) {
+        if hwnd_of(spec.label).is_none() {
+            remember(&w);
+        }
         return Ok(w);
     }
     let w = WebviewWindowBuilder::new(app, spec.label, WebviewUrl::App(spec.page.into()))
@@ -38,6 +56,7 @@ pub fn get_or_create(app: &AppHandle, spec: &Spec) -> tauri::Result<WebviewWindo
         .focused(spec.focus)
         .visible(false)
         .build()?;
+    remember(&w);
     Ok(w)
 }
 
@@ -103,6 +122,11 @@ pub fn show(app: &AppHandle, spec: &Spec, how: Place) -> Option<WebviewWindow> {
 }
 
 pub fn hide(app: &AppHandle, label: &str) {
+    // Windows shown with show_no_activate are unknown to Tauri, so its hide() alone can do
+    // nothing. Hide through Windows directly too.
+    if let Some(h) = hwnd_of(label) {
+        crate::winutil::hide_native(h);
+    }
     if let Some(w) = app.get_webview_window(label) {
         let _ = w.hide();
     }

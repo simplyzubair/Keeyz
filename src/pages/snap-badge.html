@@ -8,17 +8,17 @@
     html, body { background: transparent; overflow: hidden; }
     /* Small, quiet, see-through countdown. It never takes focus and clicks pass through it. */
     .pill { margin: 3px auto; width: fit-content; height: 26px; display: flex; align-items: center; gap: 7px; padding: 0 11px; border-radius: 99px;
-      background: rgba(28, 27, 26, .82); color: #ecebe8; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 6px 16px -8px rgba(0,0,0,.4);
+      background: rgba(28, 27, 26, .88); color: #ecebe8; border: 1px solid rgba(255,255,255,.08); box-shadow: 0 6px 16px -8px rgba(0,0,0,.4);
       font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; animation: pop .16s var(--ease); }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: #7cc0b1; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #ecebe8; }
     .cols { display: inline-flex; gap: 1.5px; height: 10px; }
-    .cols i { width: 3px; border-radius: 1px; background: #7cc0b1; opacity: .85; }
+    .cols i { width: 3px; border-radius: 1px; background: #ecebe8; opacity: .85; }
     .bar { width: 34px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; }
-    .bar b { display: block; height: 100%; background: #7cc0b1; transition: width .9s linear; }
+    .bar b { display: block; height: 100%; background: #ecebe8; transition: width .9s linear; }
   </style>
 </head>
 <body>
-  <div class="pill"><span class="dot"></span><span id="what">snap</span><span class="bar"><b id="fill"></b></span><span id="left"></span></div>
+  <div class="pill"><img src="./lib/logo.svg" alt="" style="width:14px;height:14px;border-radius:4px" /><span id="what">snap</span><span class="bar"><b id="fill"></b></span><span id="left"></span></div>
   <script type="module">
     import { boot, listen, $ } from './lib/core.js';
     await boot();

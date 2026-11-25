@@ -2,7 +2,6 @@ import { boot, invoke, listen, win, $, $$, esc, h, getSettings, saveSettings, to
 import { TRANSLATE_LANGS, VOICE_LANGS } from './lib/langs.js';
 import { icon, actIcon } from './lib/icons.js';
 import logoUrl from './lib/logo.svg';
-import snapImg from './lib/snap.png';
 
 $$('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon, b.classList.contains('tb-btn') ? 15 : 19)));
 
@@ -346,17 +345,24 @@ const SHORTCUT_NAMES = { actions: 'Quick Actions', launcher: 'Launcher', clipboa
 // ============================================================ SNAP (window snapping, was Snapperr)
 // A tiny screen with the part the window goes to highlighted.
 const mini = (x, w, cols = 0) => `<span class="snap-mini">${cols ? Array.from({ length: cols }, (_, i) => `<i style="left:${(i / cols) * 100}%;width:${100 / cols}%" class="${i === 1 ? 'on' : 'col'}"></i>`).join('') : `<i class="on" style="left:${x * 100}%;width:${w * 100}%"></i>`}</span>`;
+// [key id, name, x, width] – every key can be changed by clicking it
 const SNAP_LAYOUTS = [
-  ['Left third', 0, 1 / 3, 'Ctrl+←'], ['Center third', 1 / 3, 1 / 3, 'Ctrl+↓'], ['Right third', 2 / 3, 1 / 3, 'Ctrl+→'],
-  ['Left half', 0, 1 / 2, 'Ctrl+L'], ['Right half', 1 / 2, 1 / 2, 'Ctrl+;'], ['Full screen', 0, 1, 'Ctrl+F'],
+  ['left_third', 'Left third', 0, 1 / 3], ['center_third', 'Center third', 1 / 3, 1 / 3], ['right_third', 'Right third', 2 / 3, 1 / 3],
+  ['left_half', 'Left half', 0, 1 / 2], ['right_half', 'Right half', 1 / 2, 1 / 2], ['full', 'Full screen', 0, 1],
 ];
-const keys = (s) => s.split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join('');
-let snapTimer = 0;
+const SNAP_NUDGE = [
+  ['move_left', 'Move left'], ['move_right', 'Move right'], ['move_up', 'Move up'], ['move_down', 'Move down'],
+  ['narrower', 'Narrower'], ['wider', 'Wider'], ['shorter', 'Shorter'], ['taller', 'Taller'],
+];
+const KEY_NAMES = { ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Escape: 'Esc' };
+const snapKeys = (accel) => (accel || '').split('+').filter(Boolean).map((k) => `<kbd>${esc(KEY_NAMES[k] || k)}</kbd>`).join('');
+const snapKey = (id) => `<button class="snap-key" data-snapkey="${id}" title="Click, then press the new keys">${snapKeys(S.snap_keys?.[id])}</button>`;
 async function renderSnap() {
   const el = $('#view-snap');
   const [st, old] = await Promise.all([invoke('snap_state'), invoke('snapperr_status').catch(() => ({}))]);
+  const colMods = S.snap_keys?.columns || 'Ctrl';
   el.innerHTML = `<div class="snap-hero">
-      <img src="${snapImg}" alt="" />
+      <span class="snap-mark">${icon('layout', 26)}</span>
       <div class="grow"><h1 style="margin:0 0 4px">Snap windows with your keyboard</h1>
         <div class="muted">Double-tap <kbd>Ctrl</kbd> to turn on snap mode, then put the window where you want it. The keys only work while snap mode is on, so other apps keep them.</div></div>
       <div class="snap-live ${st.on ? 'on' : ''}" id="snapLive"><span class="dot"></span><span id="snapLiveText">${st.on ? 'Snap mode on' : 'Snap mode off'}</span></div>
@@ -365,26 +371,36 @@ async function renderSnap() {
       ${old.running ? '<button class="btn sm" id="oldClose">Close it</button>' : ''}${old.installed ? '<button class="btn sm primary" id="oldUninstall">Uninstall it</button>' : ''}</div>` : ''}
     <div class="snap-steps">
       <div class="snap-step"><span class="snap-taps"><kbd>Ctrl</kbd><kbd>Ctrl</kbd></span><div><b>Double-tap Ctrl</b><div class="muted small">Snap mode on for ${S.snap_seconds} seconds. A soft sound plays and a small counter shows at the top of the screen.</div></div></div>
-      <div class="snap-step"><span class="snap-taps"><kbd>Ctrl</kbd><kbd>Ctrl</kbd><kbd>Ctrl</kbd></span><div><b>Triple-tap Ctrl</b><div class="muted small">Pick 2 to 9 columns, then <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> puts the window in that column.</div></div></div>
-      <div class="snap-step"><span class="snap-taps"><kbd>Esc</kbd></span><div><b>Done</b><div class="muted small">Esc or another double-tap ends it. Every key press keeps it on a little longer.</div></div></div>
+      <div class="snap-step"><span class="snap-taps"><kbd>Ctrl</kbd><kbd>Ctrl</kbd><kbd>Ctrl</kbd></span><div><b>Triple-tap Ctrl</b><div class="muted small">Pick 2 to 9 columns, then ${snapKeys(colMods)}+<kbd>1</kbd>…<kbd>9</kbd> puts the window in that column.</div></div></div>
+      <div class="snap-step"><span class="snap-taps">${snapKeys(S.snap_keys?.off)}</span><div><b>Done</b><div class="muted small">This key or another double-tap ends it. Every key press keeps it on a little longer.</div></div></div>
     </div>
-    <h2 class="snap-h">Layouts</h2>
+    <div class="snap-h"><span>Layouts</span><span class="faint small">Click a key to change it.</span><span class="spacer"></span><button class="btn ghost sm" id="snapReset">Reset keys</button></div>
     <div class="snap-grid">
-      ${SNAP_LAYOUTS.map(([name, x, w, k]) => `<div class="snap-card">${mini(x, w)}<b>${name}</b><span class="h-keys">${keys(k)}</span></div>`).join('')}
-      <div class="snap-card">${mini(0, 0, 4)}<b>Columns</b><span class="h-keys">${keys('Ctrl+1…9')}</span></div>
-      <div class="snap-card"><span class="snap-mini plain">${icon('move', 22)}</span><b>Move 20 px</b><span class="h-keys">${keys('Ctrl+Shift+Arrow')}</span></div>
-      <div class="snap-card"><span class="snap-mini plain">${icon('resize', 22)}</span><b>Resize 20 px</b><span class="h-keys">${keys('Ctrl+Shift+Alt+Arrow')}</span></div>
+      ${SNAP_LAYOUTS.map(([id, name, x, w]) => `<div class="snap-card">${mini(x, w)}<b>${name}</b>${snapKey(id)}</div>`).join('')}
+      <div class="snap-card">${mini(0, 0, 4)}<b>Columns</b><button class="snap-key" data-snapkey="columns" title="Click, then hold the modifier keys and press any number">${snapKeys(colMods)}<span class="faint small">+ 1…9</span></button></div>
     </div>
-    <p class="faint small" style="margin:8px 2px 20px">Hold the move or resize keys to keep going. Resize: Right / Down make it bigger, Left / Up smaller. Snaps to the visible edges of the window, on the screen it is on.</p>
+    <div class="set-group" style="margin-top:14px"><div class="g-title"><span class="g-ico">${icon('move', 15)}</span>Move and resize <span class="spacer"></span><span class="faint small">20 px per press. Hold to keep going.</span></div>
+      <div class="snap-nudge">${SNAP_NUDGE.map(([id, name]) => `<div class="snap-nudge-row"><span>${name}</span>${snapKey(id)}</div>`).join('')}
+        <div class="snap-nudge-row"><span>Snap mode off</span>${snapKey('off')}</div></div>
+    </div>
     <div class="set-group"><div class="g-title"><span class="g-ico">${icon('layout', 15)}</span>Snap settings</div>
       ${row('Snap windows', 'Double-tap or triple-tap Ctrl to snap windows. Turn off if another app uses Ctrl taps.', sw('snap_enabled'))}
       ${row('Soft sounds', 'A quiet sound when snap mode turns on and off.', sw('snap_sounds'))}
       ${row('Snap mode stays on', 'Seconds after the last key press.', seg('snap_seconds', [[5, '5 s'], [10, '10 s'], [20, '20 s']]))}
       ${row('Try it', 'Turns snap mode on for this window, so you can try the keys right here.', `<button class="btn sm" id="snapTry">${icon('play', 12)} Try it now</button>`)}
     </div>
-    <p class="faint small">Windows doesn't let normal apps move windows of apps running as administrator, so those can't be snapped.</p>`;
+    <p class="faint small">Snaps to the visible edges of the window, on the screen it is on. Windows doesn't let normal apps move windows of apps running as administrator, so those can't be snapped.</p>`;
   bindSwitches(el);
   $('#snapTry').onclick = () => invoke('snap_start');
+  $('#snapReset').onclick = async () => { if (confirm('Put all snap keys back to the defaults?')) { S = await invoke('reset_section', { section: 'snap' }); renderSnap(); } };
+  $$('[data-snapkey]', el).forEach((b) => (b.onclick = () => record(b, async (acc) => {
+    const id = b.dataset.snapkey;
+    // columns keep only the modifiers: "Ctrl+Alt+3" -> "Ctrl+Alt"
+    const val = id === 'columns' ? acc.split('+').filter((k) => ['Ctrl', 'Alt', 'Shift'].includes(k)).join('+') || 'Ctrl' : acc;
+    const clash = Object.entries(S.snap_keys).find(([k, v]) => k !== id && k !== 'columns' && v === val);
+    if (clash) return toast('That key is already used', `It is set for “${clash[0].replace('_', ' ')}”. Pick another one.`, true);
+    S = await saveSettings({ snap_keys: { ...S.snap_keys, [id]: val } });
+  }, renderSnap, true)));
   $('#oldClose')?.addEventListener('click', async () => { await invoke('snapperr_close'); toast('Snapperr closed'); renderSnap(); });
   $('#oldUninstall')?.addEventListener('click', async () => {
     try { await invoke('snapperr_uninstall'); toast('Snapperr uninstaller opened', 'Confirm there to remove the old app.'); } catch (e) { toast("Couldn't uninstall Snapperr", String(e), true); }
@@ -507,19 +523,22 @@ function customLabel(c) {
   if (c.kind === 'workflow') return `Workflow: ${S.workflows.find((w) => w.id === c.target)?.name || c.target}`;
   return S.actions.find((a) => a.id === c.target)?.name || c.target;
 }
-function record(el, onDone) {
+/** Record a key combination. `anyKey`: also accept keys without Ctrl/Alt/Shift (snap keys). */
+function record(el, onDone, after = renderSettings, anyKey = false) {
   el.classList.add('rec');
   el.innerHTML = '<span class="muted">Press keys…</span>';
   invoke('suspend_shortcuts', { suspend: true });
   const handler = async (e) => {
     e.preventDefault();
-    if (e.key === 'Escape') return finish();
-    const acc = accelFromEvent(e);
+    e.stopPropagation();
+    if (e.key === 'Escape' && !(anyKey && el.dataset.snapkey === 'off')) return finish();
+    let acc = accelFromEvent(e);
+    if (!acc && anyKey && !/^(Control|Shift|Alt|Meta|OS)/.test(e.code)) acc = e.code === 'Escape' ? 'Escape' : e.code.replace(/^Key/, '').replace(/^Digit/, '');
     if (!acc) return;
     await onDone(acc);
     finish();
   };
-  const finish = () => { window.removeEventListener('keydown', handler, true); invoke('suspend_shortcuts', { suspend: false }); renderSettings(); };
+  const finish = () => { window.removeEventListener('keydown', handler, true); invoke('suspend_shortcuts', { suspend: false }); after(); };
   window.addEventListener('keydown', handler, true);
 }
 

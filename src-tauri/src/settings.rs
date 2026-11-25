@@ -151,6 +151,8 @@ pub struct Settings {
     pub snap_enabled: bool,
     pub snap_sounds: bool,
     pub snap_seconds: u32,
+    /// snap key id -> accelerator ("Ctrl+ArrowLeft"); "columns" holds only the modifiers ("Ctrl")
+    pub snap_keys: HashMap<String, String>,
 
     // ---- appearance ----
     pub theme: String,
@@ -186,6 +188,31 @@ pub fn default_shortcuts() -> HashMap<String, String> {
         ("reply", "Ctrl+Shift+Y"),
         ("summarize", ""),
         ("show_app", ""),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect()
+}
+
+/// Snap keys (only active while snap mode is on). The user can change each one.
+pub fn default_snap_keys() -> HashMap<String, String> {
+    [
+        ("left_third", "Ctrl+ArrowLeft"),
+        ("center_third", "Ctrl+ArrowDown"),
+        ("right_third", "Ctrl+ArrowRight"),
+        ("left_half", "Ctrl+L"),
+        ("right_half", "Ctrl+;"),
+        ("full", "Ctrl+F"),
+        ("move_left", "Ctrl+Shift+ArrowLeft"),
+        ("move_right", "Ctrl+Shift+ArrowRight"),
+        ("move_up", "Ctrl+Shift+ArrowUp"),
+        ("move_down", "Ctrl+Shift+ArrowDown"),
+        ("narrower", "Ctrl+Alt+Shift+ArrowLeft"),
+        ("wider", "Ctrl+Alt+Shift+ArrowRight"),
+        ("shorter", "Ctrl+Alt+Shift+ArrowUp"),
+        ("taller", "Ctrl+Alt+Shift+ArrowDown"),
+        ("columns", "Ctrl"),
+        ("off", "Escape"),
     ]
     .into_iter()
     .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -240,6 +267,7 @@ impl Default for Settings {
             snap_enabled: true,
             snap_sounds: true,
             snap_seconds: 10,
+            snap_keys: default_snap_keys(),
             theme: "system".into(),
             text_size: "default".into(),
             language: "en".into(),
@@ -305,6 +333,9 @@ impl Settings {
         }
         for (k, v) in default_models() {
             self.models.entry(k).or_insert(v);
+        }
+        for (k, v) in default_snap_keys() {
+            self.snap_keys.entry(k).or_insert(v);
         }
         // Older versions had one global "custom model id". Move it into the current provider's model,
         // and drop values that are clearly not models (Google Cloud project names, keys).

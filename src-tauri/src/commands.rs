@@ -123,6 +123,7 @@ pub fn reset_section(app: AppHandle, st: State<AppState>, section: String) -> R<
     let d = Settings::default();
     let patch = match section.as_str() {
         "shortcuts" => json!({"shortcuts": d.shortcuts, "custom_shortcuts": []}),
+        "snap" => json!({"snap_keys": d.snap_keys}),
         "trigger" => json!({"trigger_word": d.trigger_word, "typed_commands": true, "instant_run": false,
             "live_translate": false, "rewrite_whole_field": false, "double_space_action": "none", "run_spaces": 2}),
         "actions" => json!({"actions": [], "action_order": []}),
@@ -841,6 +842,9 @@ pub fn launcher_action(app: AppHandle, st: State<AppState>, kind: String, id: St
 
 #[tauri::command]
 pub fn hide_me(win: WebviewWindow) {
+    if let Ok(h) = win.hwnd() {
+        winutil::hide_native(h.0 as isize);
+    }
     let _ = win.hide();
 }
 

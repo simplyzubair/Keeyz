@@ -230,6 +230,17 @@ pub fn select_left(n: usize) {
     sleep(Duration::from_millis(40));
 }
 
+/// Hide a window through Windows itself (works no matter how it was shown).
+pub fn hide_native(hwnd: isize) {
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut _), SW_HIDE);
+    }
+}
+
+pub fn is_visible(hwnd: isize) -> bool {
+    unsafe { IsWindowVisible(HWND(hwnd as *mut _)).as_bool() }
+}
+
 /// Show a small helper window (typing bubble, selection toolbar) WITHOUT taking focus from the user's app.
 pub fn show_no_activate(hwnd: isize) {
     unsafe {

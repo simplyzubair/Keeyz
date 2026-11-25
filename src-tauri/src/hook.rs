@@ -37,18 +37,15 @@ fn close_toolbar_soon() {
     });
 }
 
-/// Debug builds only: append a line to %TEMP%\keeyz-debug.log (release builds log nothing).
+/// Append a line to %TEMP%\keeyz-debug.log – debug builds, or when Keeyz runs with KEEYZ_DEBUG=1.
 macro_rules! dbg_log {
     ($($arg:tt)*) => {{
-        #[cfg(debug_assertions)]
-        {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("keeyz-debug.log")) {
-                let _ = writeln!(f, $($arg)*);
-            }
+        if cfg!(debug_assertions) || crate::state::debug_on() {
+            crate::state::debug_line(&format!($($arg)*));
         }
     }};
 }
+pub(crate) use dbg_log;
 
 struct Typed {
     buf: String,
@@ -84,9 +81,24 @@ static T: Lazy<Mutex<Typed>> = Lazy::new(|| {
 
 pub fn start(app: AppHandle) {
     let _ = APP.set(app);
-    std::thread::spawn(|| {
-        if let Err(e) = rdev::listen(on_event) {
-            eprintln!("[hook] failed: {e:?}");
+    // The hook callback only queues the event; a worker does the real work. Windows silently
+    // removes a keyboard hook whose callback is ever too slow, and then Keeyz would see no keys.
+    let (tx, rx) = std::sync::mpsc::channel::<rdev::Event>();
+    std::thread::spawn(move || {
+        for ev in rx {
+            on_event(ev);
+        }
+    });
+    std::thread::spawn(move || {
+        dbg_log!("[hook] starting keyboard and mouse hook");
+        let res = rdev::listen(move |ev| {
+            if INJECTING.load(Ordering::SeqCst) {
+                return; // Keeyz's own key presses
+            }
+            let _ = tx.send(ev);
+        });
+        if let Err(e) = res {
+            dbg_log!("[hook] failed: {e:?}");
         }
     });
     // "Run on pause" poller
@@ -117,9 +129,6 @@ fn reset(t: &mut Typed) {
 }
 
 fn on_event(ev: rdev::Event) {
-    if INJECTING.load(Ordering::SeqCst) {
-        return;
-    }
     match ev.event_type {
         EventType::KeyPress(k) => {
             if matches!(k, Key::ControlLeft | Key::ControlRight) {
@@ -162,16 +171,13 @@ fn on_event(ev: rdev::Event) {
                 let app = app.clone();
                 std::thread::spawn(move || {
                     // a click anywhere outside the selection toolbar closes it
-                    if let Some(w) = app.get_webview_window("toolbar") {
-                        if w.is_visible().unwrap_or(false) {
-                            let inside = w
-                                .hwnd()
-                                .ok()
-                                .and_then(|h| winutil::window_rect(h.0 as isize))
+                    if let Some(h) = crate::windows_mgr::hwnd_of("toolbar") {
+                        if winutil::is_visible(h) {
+                            let inside = winutil::window_rect(h)
                                 .map(|(x, y, ww, hh)| p.0 >= x && p.0 < x + ww && p.1 >= y && p.1 < y + hh)
                                 .unwrap_or(false);
                             if !inside {
-                                let _ = w.hide();
+                                crate::windows_mgr::hide(&app, "toolbar");
                                 TOOLBAR_UP.store(false, Ordering::SeqCst);
                             }
                         }
