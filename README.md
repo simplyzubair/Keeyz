@@ -27,6 +27,8 @@ A Tauri 2 (Rust + web UI) desktop app. Everything is unlocked, and the AI runs o
 ## Run it
 
 - **Install:** download the latest `Keeyz_x.y.z_x64-setup.exe` from GitHub Releases. After that, Keeyz updates itself (Settings → About → Check for updates).
+- **Install from the command line:** in PowerShell run `irm https://raw.githubusercontent.com/simplyzubair/Keeyz/main/cli/install.ps1 | iex`. It adds the `keeyz` command (in `%LOCALAPPDATA%\Programs\Keeyz-cli`) and installs the app. Then `keeyz update` updates it, `keeyz version` shows the installed and newest version (and says when an update is available), and `keeyz cleanup` removes old apps Keeyz replaces. Source: `cli/`.
+- **Old apps are removed:** installing or updating Keeyz quietly uninstalls its older names (Zkey, Keyshifterr) and Snapperr (window snapping is built into Keeyz now). Keeyz itself is upgraded in place; settings and keys stay.
 - **Dev mode:** `npm install`, then `npx tauri dev`.
 - **Build:** `npx tauri build`.
 
