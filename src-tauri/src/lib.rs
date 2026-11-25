@@ -192,8 +192,6 @@ pub fn run() {
                     let id = SHORTCUT_MAP.lock().unwrap().get(&sc.id()).cloned();
                     if let Some(id) = id {
                         commands::hotkey(app, &id);
-                    } else {
-                        snap::on_hotkey(app, sc.id());
                     }
                 })
                 .build(),

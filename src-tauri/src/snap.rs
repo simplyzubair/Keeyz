@@ -11,18 +11,18 @@
 //!     Ctrl+Shift+Alt+Arrow       resize 20 px (Right/Down bigger, Left/Up smaller)
 //!   Every key press restarts the countdown. Esc or a double-tap ends it.
 //!
-//! The Ctrl taps are counted from the global keyboard hook (cheap bookkeeping only); the snap
-//! keys are real global shortcuts that exist only while snap mode is on.
+//! The Ctrl taps are counted from the global keyboard hook (cheap bookkeeping only). While snap
+//! mode is on, a second low-level keyboard hook catches the snap keys and keeps them away from
+//! the app in front (like the old Snapperr did). Normal hotkeys can't be used: other apps often
+//! own Ctrl+1…4 and similar, and Windows then refuses them.
 
 use crate::state::AppState;
 use crate::winutil;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
 pub const STEP: i32 = 20;
 pub const MIN_SIZE: i32 = 120;
@@ -37,10 +37,16 @@ static COLS: AtomicI32 = AtomicI32::new(0);
 static RUN: AtomicU64 = AtomicU64::new(0);
 /// window that was active when the column picker opened
 static PICKER_TARGET: AtomicIsize = AtomicIsize::new(0);
-/// changes on every move/resize press, so only the newest "hold to repeat" loop runs
-static REPEAT: AtomicU64 = AtomicU64::new(0);
-/// shortcut id -> snap command, only while snap mode is on
-static KEYS: Lazy<Mutex<HashMap<u32, Cmd>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// (modifiers, virtual key, command) caught while snap mode is on
+static ACTIVE_KEYS: Lazy<Mutex<Vec<(u8, u16, Cmd)>>> = Lazy::new(|| Mutex::new(vec![]));
+/// thread that owns the snap keyboard hook (0 = no hook)
+static HOOK_THREAD: AtomicU32 = AtomicU32::new(0);
+/// caught keys go to this worker, so the hook itself returns at once
+static TX: Lazy<Mutex<Option<std::sync::mpsc::Sender<Cmd>>>> = Lazy::new(|| Mutex::new(None));
+
+const CTRL: u8 = 1;
+const SHIFT: u8 = 2;
+const ALT: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cmd {
@@ -197,71 +203,112 @@ fn chime(app: &AppHandle, name: &str) {
 
 // ------------------------------------------------------------------ keys (only while on)
 
-fn key_list(cols: i32) -> Vec<(Shortcut, Cmd)> {
-    let c = Modifiers::CONTROL;
-    let cs = Modifiers::CONTROL | Modifiers::SHIFT;
-    let csa = Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT;
+pub fn key_list(cols: i32) -> Vec<(u8, u16, Cmd)> {
+    const LEFT_K: u16 = 0x25;
+    const UP: u16 = 0x26;
+    const RIGHT: u16 = 0x27;
+    const DOWN: u16 = 0x28;
+    let cs = CTRL | SHIFT;
+    let csa = CTRL | SHIFT | ALT;
     let mut v = vec![
-        (Shortcut::new(None, Code::Escape), Cmd::Off),
-        (Shortcut::new(Some(c), Code::ArrowLeft), Cmd::Snap(0.0, 1.0 / 3.0)),
-        (Shortcut::new(Some(c), Code::ArrowDown), Cmd::Snap(1.0 / 3.0, 1.0 / 3.0)),
-        (Shortcut::new(Some(c), Code::ArrowRight), Cmd::Snap(2.0 / 3.0, 1.0 / 3.0)),
-        (Shortcut::new(Some(c), Code::KeyL), Cmd::Snap(0.0, 0.5)),
-        (Shortcut::new(Some(c), Code::Semicolon), Cmd::Snap(0.5, 0.5)),
-        (Shortcut::new(Some(c), Code::KeyF), Cmd::Snap(0.0, 1.0)),
-        (Shortcut::new(Some(cs), Code::ArrowLeft), Cmd::Move(-STEP, 0)),
-        (Shortcut::new(Some(cs), Code::ArrowRight), Cmd::Move(STEP, 0)),
-        (Shortcut::new(Some(cs), Code::ArrowUp), Cmd::Move(0, -STEP)),
-        (Shortcut::new(Some(cs), Code::ArrowDown), Cmd::Move(0, STEP)),
-        (Shortcut::new(Some(csa), Code::ArrowLeft), Cmd::Resize(-STEP, 0)),
-        (Shortcut::new(Some(csa), Code::ArrowRight), Cmd::Resize(STEP, 0)),
-        (Shortcut::new(Some(csa), Code::ArrowUp), Cmd::Resize(0, -STEP)),
-        (Shortcut::new(Some(csa), Code::ArrowDown), Cmd::Resize(0, STEP)),
+        (0, 0x1B, Cmd::Off), // Esc
+        (CTRL, LEFT_K, Cmd::Snap(0.0, 1.0 / 3.0)),
+        (CTRL, DOWN, Cmd::Snap(1.0 / 3.0, 1.0 / 3.0)),
+        (CTRL, RIGHT, Cmd::Snap(2.0 / 3.0, 1.0 / 3.0)),
+        (CTRL, 0x4C, Cmd::Snap(0.0, 0.5)), // L
+        (CTRL, 0xBA, Cmd::Snap(0.5, 0.5)), // ;
+        (CTRL, 0x46, Cmd::Snap(0.0, 1.0)), // F
+        (cs, LEFT_K, Cmd::Move(-STEP, 0)),
+        (cs, RIGHT, Cmd::Move(STEP, 0)),
+        (cs, UP, Cmd::Move(0, -STEP)),
+        (cs, DOWN, Cmd::Move(0, STEP)),
+        (csa, LEFT_K, Cmd::Resize(-STEP, 0)),
+        (csa, RIGHT, Cmd::Resize(STEP, 0)),
+        (csa, UP, Cmd::Resize(0, -STEP)),
+        (csa, DOWN, Cmd::Resize(0, STEP)),
     ];
-    let digits = [Code::Digit1, Code::Digit2, Code::Digit3, Code::Digit4, Code::Digit5, Code::Digit6, Code::Digit7, Code::Digit8, Code::Digit9];
-    for (i, d) in digits.iter().enumerate().take(cols.clamp(0, 9) as usize) {
-        v.push((Shortcut::new(Some(c), *d), Cmd::Column(i as i32 + 1)));
+    for k in 1..=cols.clamp(0, 9) {
+        v.push((CTRL, 0x30 + k as u16, Cmd::Column(k))); // Ctrl+1…9 (top row)
+        v.push((CTRL, 0x60 + k as u16, Cmd::Column(k))); // Ctrl+1…9 (number pad)
     }
     v
 }
 
 fn register_keys(app: &AppHandle) {
-    unregister_keys(app);
-    let gs = app.global_shortcut();
-    let mut map = KEYS.lock().unwrap();
-    for (sc, cmd) in key_list(COLS.load(Ordering::SeqCst)) {
-        // a key already used by another app is simply skipped
-        if gs.register(sc).is_ok() {
-            map.insert(sc.id(), cmd);
-        }
+    *ACTIVE_KEYS.lock().unwrap() = key_list(COLS.load(Ordering::SeqCst));
+    if HOOK_THREAD.load(Ordering::SeqCst) != 0 {
+        return; // hook already running; it reads the new key list
     }
-}
-
-fn unregister_keys(app: &AppHandle) {
-    let gs = app.global_shortcut();
-    let mut map = KEYS.lock().unwrap();
-    for (sc, _) in key_list(9) {
-        if map.contains_key(&sc.id()) {
-            let _ = gs.unregister(sc);
-        }
-    }
-    map.clear();
-}
-
-/// Global shortcut handler: true when the key belonged to snap mode.
-pub fn on_hotkey(app: &AppHandle, id: u32) -> bool {
-    let Some(cmd) = KEYS.lock().unwrap().get(&id).copied() else { return false };
+    let (tx, rx) = std::sync::mpsc::channel::<Cmd>();
+    *TX.lock().unwrap() = Some(tx);
     let app = app.clone();
-    std::thread::spawn(move || run_cmd(&app, cmd, true));
-    true
+    std::thread::spawn(move || {
+        for cmd in rx {
+            run_cmd(&app, cmd);
+        }
+    });
+    std::thread::spawn(|| unsafe {
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::System::Threading::GetCurrentThreadId;
+        use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG, WH_KEYBOARD_LL};
+        HOOK_THREAD.store(GetCurrentThreadId(), Ordering::SeqCst);
+        let module: windows::Win32::Foundation::HINSTANCE = GetModuleHandleW(None).map(|m| m.into()).unwrap_or_default();
+        let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_hook), module, 0) else {
+            HOOK_THREAD.store(0, Ordering::SeqCst);
+            return;
+        };
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+        let _ = UnhookWindowsHookEx(hook);
+    });
 }
 
-fn run_cmd(app: &AppHandle, cmd: Cmd, first: bool) {
+fn unregister_keys(_app: &AppHandle) {
+    ACTIVE_KEYS.lock().unwrap().clear();
+    *TX.lock().unwrap() = None; // ends the worker
+    let tid = HOOK_THREAD.swap(0, Ordering::SeqCst);
+    if tid != 0 {
+        unsafe {
+            use windows::Win32::Foundation::{LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+            let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+/// Low-level keyboard hook, only installed in snap mode. Must return fast: it only looks the
+/// key up and hands the command to the worker thread.
+unsafe extern "system" fn key_hook(code: i32, w: windows::Win32::Foundation::WPARAM, l: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN};
+    let down = w.0 as u32 == WM_KEYDOWN || w.0 as u32 == WM_SYSKEYDOWN;
+    if code == HC_ACTION as i32 && down && !crate::state::INJECTING.load(Ordering::SeqCst) {
+        let k = &*(l.0 as *const KBDLLHOOKSTRUCT);
+        let mods = (if winutil::is_down(0x11) { CTRL } else { 0 })
+            | (if winutil::is_down(0x10) { SHIFT } else { 0 })
+            | (if winutil::is_down(0x12) { ALT } else { 0 });
+        let hit = ACTIVE_KEYS.lock().ok().and_then(|keys| keys.iter().find(|(m, v, _)| *m == mods && *v as u32 == k.vkCode).map(|x| x.2));
+        if let Some(cmd) = hit {
+            // Ctrl+key is not a Ctrl tap (the other hook never sees this key)
+            if let Ok(mut t) = TAPS.lock() {
+                t.other();
+            }
+            if let Some(tx) = TX.lock().ok().and_then(|t| t.clone()) {
+                let _ = tx.send(cmd);
+            }
+            return LRESULT(1); // keep the key away from the app in front
+        }
+    }
+    CallNextHookEx(None, code, w, l)
+}
+
+fn run_cmd(app: &AppHandle, cmd: Cmd) {
     if cmd == Cmd::Off {
         return stop(app);
     }
     keep_on(app);
     let Some(hwnd) = target(app) else { return };
+    // holding a key repeats it by itself (Windows sends the key again and again)
     match cmd {
         Cmd::Snap(x, w) => place(hwnd, x, w),
         Cmd::Column(k) => {
@@ -272,32 +319,6 @@ fn run_cmd(app: &AppHandle, cmd: Cmd, first: bool) {
         Cmd::Resize(dw, dh) => winutil::nudge_window(hwnd, 0, 0, dw, dh, MIN_SIZE),
         Cmd::Off => {}
     }
-    // hold the keys down to keep moving / resizing
-    if first && matches!(cmd, Cmd::Move(..) | Cmd::Resize(..)) {
-        let me = REPEAT.fetch_add(1, Ordering::SeqCst) + 1;
-        let (arrow, alt) = match cmd {
-            Cmd::Move(dx, dy) | Cmd::Resize(dx, dy) => (arrow_vk(dx, dy), matches!(cmd, Cmd::Resize(..))),
-            _ => unreachable!(),
-        };
-        let app = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(350));
-            while REPEAT.load(Ordering::SeqCst) == me
-                && ON.load(Ordering::SeqCst)
-                && winutil::is_down(arrow)
-                && winutil::is_down(0x11) // Ctrl
-                && winutil::is_down(0x10) // Shift
-                && winutil::is_down(0x12) == alt
-            {
-                run_cmd(&app, cmd, false);
-                std::thread::sleep(Duration::from_millis(30));
-            }
-        });
-    }
-}
-
-fn arrow_vk(dx: i32, dy: i32) -> u16 {
-    if dx < 0 { 0x25 } else if dx > 0 { 0x27 } else if dy < 0 { 0x26 } else { 0x28 }
 }
 
 /// The window to move: the active one, unless it is one of snap's own little windows.
@@ -513,9 +534,14 @@ mod tests {
 
     #[test]
     fn columns_register_only_what_was_picked() {
-        let cols = |n| key_list(n).iter().filter(|(_, c)| matches!(c, Cmd::Column(_))).count();
+        let cols = |n| key_list(n).iter().filter(|(_, _, c)| matches!(c, Cmd::Column(_))).count();
         assert_eq!(cols(0), 0);
-        assert_eq!(cols(4), 4);
-        assert_eq!(cols(9), 9);
+        assert_eq!(cols(4), 8, "top row + number pad");
+        assert_eq!(cols(9), 18);
+        // every key + modifier combination means one thing only
+        let keys = key_list(9);
+        for (i, a) in keys.iter().enumerate() {
+            assert!(!keys[i + 1..].iter().any(|b| a.0 == b.0 && a.1 == b.1), "duplicate key {a:?}");
+        }
     }
 }
