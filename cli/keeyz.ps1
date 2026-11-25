@@ -23,12 +23,23 @@ function Get-Installed {
     return $null
 }
 
+# Reads the newest version from the release files themselves (no GitHub API, so no hourly limit).
+function Get-Text($url) {
+    $r = Invoke-WebRequest $url -UseBasicParsing -Headers @{ "User-Agent" = "keeyz-cli" }
+    if ($r.Content -is [byte[]]) { return [Text.Encoding]::UTF8.GetString($r.Content) }
+    return [string]$r.Content
+}
+
 function Get-Latest {
-    $r = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ "User-Agent" = "keeyz-cli" }
-    $asset = $r.assets | Where-Object { $_.name -match '^Keeyz_[\d.]+_x64-setup\.exe$' } | Select-Object -First 1
-    if (-not $asset) { throw "The newest release has no Windows installer yet. Try again in a few minutes." }
-    if ($asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw "The newest release has no checksum, so it cannot be checked." }
-    [pscustomobject]@{ Version = [version]($r.tag_name -replace '^v'); Url = $asset.browser_download_url; Sha256 = $Matches[1]; File = $asset.name }
+    $base = "https://github.com/$Repo/releases/latest/download"
+    $j = Get-Text "$base/latest.json" | ConvertFrom-Json
+    $url = $j.platforms.'windows-x86_64'.url
+    $file = Split-Path $url -Leaf
+    if ($file -notmatch '^Keeyz_[\d.]+_x64-setup\.exe$') { throw "The newest release has no Windows installer yet. Try again in a few minutes." }
+    $sums = Get-Text "$base/SHA256SUMS.txt"
+    $line = $sums -split "`n" | Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($file))\s*$" } | Select-Object -First 1
+    if (-not $line -or $line -notmatch '^([0-9a-fA-F]{64})') { throw "The newest release has no checksum, so it cannot be checked." }
+    [pscustomobject]@{ Version = [version]$j.version; Url = $url; Sha256 = $Matches[1]; File = $file }
 }
 
 # Quietly uninstall the old apps Keeyz replaces. Never touches Keeyz itself or its settings.

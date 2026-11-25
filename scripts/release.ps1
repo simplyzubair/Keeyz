@@ -56,5 +56,9 @@ git push origin main
 # Keeyz-setup.exe = same installer under a fixed name, so the website's download link never changes.
 $stable = Join-Path $env:TEMP "Keeyz-setup.exe"
 Copy-Item (Join-Path $dir $exe) $stable -Force
-gh release create "v$Version" (Join-Path $dir $exe) (Join-Path $dir "$exe.sig") $latestPath $stable --title "Keeyz v$Version" --notes $Notes
+# SHA256SUMS.txt: checksums the "keeyz" command line checks downloads against
+$sumsPath = Join-Path $dir "SHA256SUMS.txt"
+$sums = foreach ($f in @((Join-Path $dir $exe), $stable)) { "{0}  {1}" -f (Get-FileHash $f -Algorithm SHA256).Hash.ToLower(), (Split-Path $f -Leaf) }
+[IO.File]::WriteAllText((Join-Path (Get-Location) $sumsPath), (($sums -join "`n") + "`n"), $utf8)
+gh release create "v$Version" (Join-Path $dir $exe) (Join-Path $dir "$exe.sig") $latestPath $stable $sumsPath --title "Keeyz v$Version" --notes $Notes
 Write-Host "Published v$Version. Installed apps will offer the update."
