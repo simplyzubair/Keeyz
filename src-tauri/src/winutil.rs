@@ -230,6 +230,33 @@ pub fn select_left(n: usize) {
     sleep(Duration::from_millis(40));
 }
 
+/// True when the window in front belongs to an app running as administrator (or one we may
+/// not even look at). Windows keeps those apps' keys away from normal apps like Keeyz.
+pub fn foreground_is_admin() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows::Win32::System::Threading::{OpenProcess, OpenProcessToken};
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid));
+        if pid == 0 {
+            return false;
+        }
+        let Ok(p) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return true };
+        let mut tok = HANDLE::default();
+        if OpenProcessToken(p, TOKEN_QUERY, &mut tok).is_err() {
+            let _ = CloseHandle(p);
+            return true;
+        }
+        let mut el = TOKEN_ELEVATION::default();
+        let mut len = 0u32;
+        let ok = GetTokenInformation(tok, TokenElevation, Some(&mut el as *mut _ as *mut _), std::mem::size_of::<TOKEN_ELEVATION>() as u32, &mut len).is_ok();
+        let _ = CloseHandle(tok);
+        let _ = CloseHandle(p);
+        ok && el.TokenIsElevated != 0
+    }
+}
+
 /// Hide a window through Windows itself (works no matter how it was shown).
 pub fn hide_native(hwnd: isize) {
     unsafe {

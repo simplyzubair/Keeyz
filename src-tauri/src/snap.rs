@@ -31,6 +31,9 @@ const MAX_HOLD: Duration = Duration::from_millis(400);
 const TAP_WAIT: Duration = Duration::from_millis(350);
 
 static ON: AtomicBool = AtomicBool::new(false);
+/// Switched on by hand (Snap page / tray): stays on until switched off, no countdown, and Esc is
+/// left to the apps.
+static STICKY: AtomicBool = AtomicBool::new(false);
 static LEFT: AtomicI32 = AtomicI32::new(0);
 static COLS: AtomicI32 = AtomicI32::new(0);
 /// changes whenever snap mode starts/ends, so an old countdown thread stops
@@ -152,7 +155,23 @@ pub fn is_on() -> bool {
 // ------------------------------------------------------------------ snap mode
 
 pub fn start(app: &AppHandle, sound: bool) {
-    crate::hook::dbg_log!("[snap] snap mode on");
+    // a double-tap or a timed start ends "keep on" mode
+    STICKY.store(false, Ordering::SeqCst);
+    start_mode(app, sound);
+}
+
+/// The Snap page / tray switch: snap mode on until it is switched off again.
+pub fn set_sticky(app: &AppHandle, on: bool) {
+    if on {
+        STICKY.store(true, Ordering::SeqCst);
+        start_mode(app, true);
+    } else {
+        stop(app);
+    }
+}
+
+fn start_mode(app: &AppHandle, sound: bool) {
+    crate::hook::dbg_log!("[snap] snap mode on (keep on: {})", STICKY.load(Ordering::SeqCst));
     let secs = seconds(app);
     LEFT.store(secs, Ordering::SeqCst);
     ON.store(true, Ordering::SeqCst);
@@ -169,6 +188,9 @@ pub fn start(app: &AppHandle, sound: bool) {
         if RUN.load(Ordering::SeqCst) != run || !ON.load(Ordering::SeqCst) {
             return;
         }
+        if STICKY.load(Ordering::SeqCst) {
+            continue; // switched on by hand: no countdown
+        }
         let left = LEFT.fetch_sub(1, Ordering::SeqCst) - 1;
         if left <= 0 {
             stop(&app);
@@ -183,11 +205,13 @@ pub fn stop(app: &AppHandle) {
         return;
     }
     crate::hook::dbg_log!("[snap] snap mode off");
+    STICKY.store(false, Ordering::SeqCst);
     RUN.fetch_add(1, Ordering::SeqCst);
     unregister_keys(app);
     crate::windows_mgr::hide(app, "snapbadge");
     chime(app, "Speech Off");
-    let _ = app.emit("snap-state", false);
+    let _ = app.emit("snap-state", state());
+    crate::tray_snap_checked(false);
 }
 
 fn seconds(app: &AppHandle) -> i32 {
@@ -196,6 +220,9 @@ fn seconds(app: &AppHandle) -> i32 {
 
 /// Every snap key press keeps snap mode on for the full time again.
 fn keep_on(app: &AppHandle) {
+    if STICKY.load(Ordering::SeqCst) {
+        return;
+    }
     LEFT.store(seconds(app), Ordering::SeqCst);
     update_badge(app);
 }
@@ -320,7 +347,11 @@ pub fn key_list(cols: i32, keys: &std::collections::HashMap<String, String>) -> 
 }
 
 fn register_keys(app: &AppHandle) {
-    *ACTIVE_KEYS.lock().unwrap() = key_list(COLS.load(Ordering::SeqCst), &app.state::<AppState>().settings().snap_keys);
+    let mut keys = key_list(COLS.load(Ordering::SeqCst), &app.state::<AppState>().settings().snap_keys);
+    if STICKY.load(Ordering::SeqCst) {
+        keys.retain(|k| k.2 != Cmd::Off); // kept on by hand: Esc stays with the apps
+    }
+    *ACTIVE_KEYS.lock().unwrap() = keys;
     if HOOK_THREAD.load(Ordering::SeqCst) != 0 {
         return; // hook already running; it reads the new key list
     }
@@ -337,6 +368,10 @@ fn register_keys(app: &AppHandle) {
         use windows::Win32::System::Threading::GetCurrentThreadId;
         use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG, WH_KEYBOARD_LL};
         HOOK_THREAD.store(GetCurrentThreadId(), Ordering::SeqCst);
+        let _ = windows::Win32::System::Threading::SetThreadPriority(
+            windows::Win32::System::Threading::GetCurrentThread(),
+            windows::Win32::System::Threading::THREAD_PRIORITY_HIGHEST,
+        );
         let module: windows::Win32::Foundation::HINSTANCE = GetModuleHandleW(None).map(|m| m.into()).unwrap_or_default();
         let Ok(hook) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(key_hook), module, 0) else {
             HOOK_THREAD.store(0, Ordering::SeqCst);
@@ -454,7 +489,8 @@ fn monitor_box(app: &AppHandle) -> (i32, i32, i32, i32) {
 }
 
 fn badge_payload() -> serde_json::Value {
-    serde_json::json!({ "left": LEFT.load(Ordering::SeqCst), "cols": COLS.load(Ordering::SeqCst) })
+    let left = if STICKY.load(Ordering::SeqCst) { -1 } else { LEFT.load(Ordering::SeqCst) };
+    serde_json::json!({ "left": left, "cols": COLS.load(Ordering::SeqCst) })
 }
 
 fn show_badge(app: &AppHandle) {
@@ -471,7 +507,8 @@ fn show_badge(app: &AppHandle) {
             winutil::show_no_activate(h.0 as isize);
         }
     });
-    let _ = app.emit("snap-state", true);
+    let _ = app.emit("snap-state", state());
+    crate::tray_snap_checked(STICKY.load(Ordering::SeqCst));
 }
 
 fn update_badge(app: &AppHandle) {
@@ -510,7 +547,7 @@ pub fn picked(app: &AppHandle, cols: Option<i32>) {
 
 /// For the Snap page: is snap mode on and how many columns.
 pub fn state() -> serde_json::Value {
-    serde_json::json!({ "on": is_on(), "left": LEFT.load(Ordering::SeqCst), "cols": COLS.load(Ordering::SeqCst) })
+    serde_json::json!({ "on": is_on(), "sticky": STICKY.load(Ordering::SeqCst), "left": LEFT.load(Ordering::SeqCst), "cols": COLS.load(Ordering::SeqCst) })
 }
 
 #[cfg(test)]

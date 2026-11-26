@@ -4,7 +4,7 @@
 //! - Live translate / double-space action.
 //! - Selection toolbar: shows a small toolbar after you select text with the mouse.
 
-use crate::state::{AppState, CANCEL, INJECTING, TRIGGER_PAUSED};
+use crate::state::{AppState, CANCEL, TRIGGER_PAUSED};
 use crate::winutil;
 use once_cell::sync::{Lazy, OnceCell};
 use rdev::{Button, EventType, Key};
@@ -18,9 +18,6 @@ static APP: OnceCell<AppHandle> = OnceCell::new();
 /// When the selection toolbar last appeared (ms since 1970). Clicks and keys from before that
 /// moment are old news (the hook queue can lag a little) and must not close it.
 pub static TOOLBAR_SHOWN_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Last mouse position, kept by the hook itself (mouse moves never go through the queue).
-static MOUSE_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-static MOUSE_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 pub fn now_ms() -> u64 {
     ms(std::time::SystemTime::now())
@@ -28,8 +25,10 @@ pub fn now_ms() -> u64 {
 fn ms(t: std::time::SystemTime) -> u64 {
     t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
+/// Where the mouse event being handled happened (not where the mouse is now).
 fn mouse_pos() -> (i32, i32) {
-    (MOUSE_X.load(Ordering::SeqCst), MOUSE_Y.load(Ordering::SeqCst))
+    use crate::inputhook::{EVENT_X, EVENT_Y};
+    (EVENT_X.load(Ordering::SeqCst), EVENT_Y.load(Ordering::SeqCst))
 }
 
 /// True while the selection toolbar may be on screen (typing or scrolling closes it).
@@ -102,37 +101,10 @@ static T: Lazy<Mutex<Typed>> = Lazy::new(|| {
 
 pub fn start(app: AppHandle) {
     let _ = APP.set(app);
-    // The hook callback only queues the event; a worker does the real work. Windows silently
-    // removes a keyboard hook whose callback is ever too slow, and then Keeyz would see no keys.
-    let (tx, rx) = std::sync::mpsc::channel::<rdev::Event>();
-    std::thread::spawn(move || {
-        for ev in rx {
-            on_event(ev);
-        }
-    });
-    std::thread::spawn(move || {
-        dbg_log!("[hook] starting keyboard and mouse hook");
-        let res = rdev::listen(move |ev| {
-            if INJECTING.load(Ordering::SeqCst) {
-                return; // Keeyz's own key presses
-            }
-            if let EventType::MouseMove { x, y } = ev.event_type {
-                MOUSE_X.store(x as i32, Ordering::SeqCst);
-                MOUSE_Y.store(y as i32, Ordering::SeqCst);
-                return; // far too many to queue, and only the position matters
-            }
-            if matches!(ev.event_type, EventType::ButtonPress(_) | EventType::ButtonRelease(_)) {
-                // the cursor can move without move events (e.g. moved by a program)
-                let (x, y) = winutil::cursor_pos();
-                MOUSE_X.store(x, Ordering::SeqCst);
-                MOUSE_Y.store(y, Ordering::SeqCst);
-            }
-            let _ = tx.send(ev);
-        });
-        if let Err(e) = res {
-            dbg_log!("[hook] failed: {e:?}");
-        }
-    });
+    // Keeyz's own keyboard + mouse hook: tiny callbacks, events handled in order on a worker,
+    // and a watchdog that installs the hook again if Windows ever drops it (see inputhook.rs).
+    dbg_log!("[hook] starting keyboard and mouse hook");
+    crate::inputhook::start(on_event);
     // "Run on pause" poller
     std::thread::spawn(|| loop {
         std::thread::sleep(Duration::from_millis(300));

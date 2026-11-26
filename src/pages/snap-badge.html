@@ -28,8 +28,9 @@
       if (left > prev) full = left; // (re)started: the bar is full again
       prev = left;
       $('#what').innerHTML = cols ? `<span class="cols">${'<i></i>'.repeat(cols)}</span>` : 'snap';
-      $('#left').textContent = left;
-      $('#fill').style.width = `${Math.max(0, Math.min(100, (left / full) * 100))}%`;
+      // left < 0: switched on by hand, stays on
+      $('#left').textContent = left < 0 ? 'on' : left;
+      $('#fill').style.width = left < 0 ? '100%' : `${Math.max(0, Math.min(100, (left / full) * 100))}%`;
     });
   </script>
 </body>

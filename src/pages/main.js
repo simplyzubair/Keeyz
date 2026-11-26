@@ -365,7 +365,7 @@ async function renderSnap() {
       <span class="snap-mark">${icon('layout', 26)}</span>
       <div class="grow"><h1 style="margin:0 0 4px">Snap windows with your keyboard</h1>
         <div class="muted">Double-tap <kbd>Ctrl</kbd> to turn on snap mode, then put the window where you want it. The keys only work while snap mode is on, so other apps keep them.</div></div>
-      <div class="snap-live ${st.on ? 'on' : ''}" id="snapLive"><span class="dot"></span><span id="snapLiveText">${st.on ? 'Snap mode on' : 'Snap mode off'}</span></div>
+      <label class="snap-live ${st.on ? 'on' : ''}" id="snapLive" title="Keep snap mode on until you switch it off"><span class="dot"></span><span id="snapLiveText">${st.on ? 'Snap mode on' : 'Snap mode off'}</span><span class="switch sm"><input type="checkbox" id="snapSticky" ${st.on ? 'checked' : ''}><span></span></span></label>
     </div>
     ${old.installed || old.running ? `<div class="snap-note"><span>${icon('info', 15)}</span><div class="grow"><b>The old Snapperr app is still ${old.running ? 'running' : 'installed'}.</b><div class="muted small">Snap is now part of Keeyz. With both running, every Ctrl double-tap happens twice.</div></div>
       ${old.running ? '<button class="btn sm" id="oldClose">Close it</button>' : ''}${old.installed ? '<button class="btn sm primary" id="oldUninstall">Uninstall it</button>' : ''}</div>` : ''}
@@ -392,6 +392,10 @@ async function renderSnap() {
     <p class="faint small">Snaps to the visible edges of the window, on the screen it is on. Windows doesn't let normal apps move windows of apps running as administrator, so those can't be snapped.</p>`;
   bindSwitches(el);
   $('#snapTry').onclick = () => invoke('snap_start');
+  $('#snapSticky').onchange = (e) => {
+    invoke('snap_set', { on: e.target.checked });
+    if (e.target.checked) toast('Snap mode stays on', 'Ctrl + arrows, Ctrl+L, Ctrl+; and Ctrl+F now snap windows. Switch it off here, in the tray, or double-tap Ctrl.');
+  };
   $('#snapReset').onclick = async () => { if (confirm('Put all snap keys back to the defaults?')) { S = await invoke('reset_section', { section: 'snap' }); renderSnap(); } };
   $$('[data-snapkey]', el).forEach((b) => (b.onclick = () => record(b, async (acc) => {
     const id = b.dataset.snapkey;
@@ -410,8 +414,10 @@ async function renderSnap() {
 listen('snap-state', (e) => {
   const live = $('#snapLive');
   if (!live) return;
-  live.classList.toggle('on', !!e.payload);
-  $('#snapLiveText').textContent = e.payload ? 'Snap mode on' : 'Snap mode off';
+  const on = !!(e.payload && (e.payload.on ?? e.payload));
+  live.classList.toggle('on', on);
+  $('#snapLiveText').textContent = on ? 'Snap mode on' : 'Snap mode off';
+  if ($('#snapSticky')) $('#snapSticky').checked = on;
 });
 
 async function renderSettings() {

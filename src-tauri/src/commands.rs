@@ -918,6 +918,12 @@ pub fn snap_start(app: AppHandle) {
     crate::snap::start(&app, true);
 }
 
+/// The "keep snap mode on" switch (Snap page).
+#[tauri::command]
+pub fn snap_set(app: AppHandle, on: bool) {
+    crate::snap::set_sticky(&app, on);
+}
+
 #[tauri::command]
 pub fn snap_stop(app: AppHandle) {
     crate::snap::stop(&app);

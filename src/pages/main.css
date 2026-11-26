@@ -205,3 +205,5 @@ h3 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
 .snap-nudge { display: grid; grid-template-columns: 1fr 1fr; }
 .snap-nudge-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 16px; border-top: 1px solid var(--line); }
 .snap-nudge-row:nth-child(odd) { border-right: 1px solid var(--line); }
+.snap-live { cursor: pointer; }
+.snap-live .switch.sm { transform: scale(.8); margin: -4px -6px -4px 2px; }

@@ -3,6 +3,7 @@ mod clipboard;
 mod commands;
 mod fast;
 mod hook;
+mod inputhook;
 mod ocr;
 mod prompts;
 mod settings;
@@ -72,6 +73,14 @@ fn suspend_shortcuts(app: AppHandle, suspend: bool) {
 /// Tray "Check for updates…" item; it turns into "Update to vX" once a new version is found.
 static UPDATE_ITEM: once_cell::sync::OnceCell<MenuItem<tauri::Wry>> = once_cell::sync::OnceCell::new();
 static UPDATE_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Tray "Snap mode on" check item (kept in step with the Snap page switch).
+static SNAP_ITEM: once_cell::sync::OnceCell<CheckMenuItem<tauri::Wry>> = once_cell::sync::OnceCell::new();
+
+pub fn tray_snap_checked(on: bool) {
+    if let Some(i) = SNAP_ITEM.get() {
+        let _ = i.set_checked(on);
+    }
+}
 
 /// Show "⬆ Update to vX" in the tray menu.
 pub fn tray_update_ready(version: &str) {
@@ -89,7 +98,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let ver = MenuItem::with_id(app, "version", format!("Version {version}"), false, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", "Check for updates…", true, None::<&str>)?;
     let tour = MenuItem::with_id(app, "tour", "Run setup tour…", true, None::<&str>)?;
-    let snap_on = MenuItem::with_id(app, "snap", "Snap a window (or double-tap Ctrl)", true, None::<&str>)?;
+    let snap_on = CheckMenuItem::with_id(app, "snap", "Snap mode on (or double-tap Ctrl)", true, false, None::<&str>)?;
+    let _ = SNAP_ITEM.set(snap_on.clone());
     let pause = CheckMenuItem::with_id(app, "pause", "Pause typed triggers", true, false, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -123,7 +133,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 windows_mgr::show_main(app);
                 let _ = app.emit("navigate", "settings");
             }
-            "snap" => snap::start(app, true),
+            "snap" => {
+                let on = SNAP_ITEM.get().and_then(|i| i.is_checked().ok()).unwrap_or(false);
+                snap::set_sticky(app, on);
+            }
             "tour" => {
                 windows_mgr::show_main(app);
                 let _ = app.emit("run-tour", ());
@@ -339,6 +352,7 @@ pub fn run() {
             commands::snap_start,
             commands::pending_update,
             commands::snap_stop,
+            commands::snap_set,
             commands::snap_pick,
             commands::snap_state,
             commands::snapperr_status,
