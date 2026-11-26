@@ -80,10 +80,11 @@ listen('update-progress', (e) => { for (const el of [$('#updPill'), $('#updNow')
 async function renderHome() {
   const el = $('#view-home');
   const [stats, history, keys] = await Promise.all([invoke('get_stats'), invoke('get_history'), invoke('key_status')]);
-  const hasKey = keys[S.provider]?.set || S.provider === 'custom';
+  // Auto uses any saved key; a local / custom model needs none
+  const hasKey = S.provider === 'custom' || (S.provider === 'auto' ? Object.values(keys).some((k) => k?.set) : keys[S.provider]?.set);
   const sc = S.shortcuts;
   el.innerHTML = `
-    ${hasKey ? '<div style="height:10px"></div>' : `<div class="notice"><span class="n-ico">${icon('key', 17)}</span><div class="grow"><b>Add your AI key to start</b><div class="muted small">Keeyz runs on your own OpenAI, Anthropic, Gemini, OpenRouter or local model key.</div></div>
+    ${hasKey ? '<div style="height:10px"></div>' : `<div class="notice"><span class="n-ico">${icon('key', 17)}</span><div class="grow"><b>Add your AI key to start</b><div class="muted small">Keeyz runs on your own OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek or local model key.</div></div>
       <button class="btn primary" id="goKey">Add key ${icon('arrowRight', 14)}</button></div>`}
     <div class="hero">
       <div class="eyebrow">${icon('sparkles', 13)} Try it here</div>
@@ -104,11 +105,12 @@ async function renderHome() {
       ${tool('mic', 'Voice', 'voice', sc.voice)}
       ${tool('scan', 'From screen', 'ocr', sc.ocr)}
       ${tool('clipboard', 'Clipboard', 'clipboard', sc.clipboard)}
+      <div class="tool" data-view="snap"><span class="t-ico">${icon('layout', 18)}</span><b>Snap windows</b><span class="t-key"><kbd>Ctrl</kbd> <kbd>Ctrl</kbd></span></div>
     </div>
-    <div class="hint">Launcher ${kbd(sc.launcher)} and workflows are one shortcut away, or search them in the box above.</div>
+    <div class="hint">From any app, ${kbd(sc.launcher)} opens the Launcher: search every tool, action and workflow in one box.</div>
     <div id="homeLive"></div>`;
   $('#goKey')?.addEventListener('click', () => show('provider'));
-  $$('.tool', el).forEach((t) => (t.onclick = () => invoke('open_tool_cmd', { tool: t.dataset.tool })));
+  $$('.tool', el).forEach((t) => (t.onclick = () => (t.dataset.view ? show(t.dataset.view) : invoke('open_tool_cmd', { tool: t.dataset.tool }))));
   renderHomeLive();
   const sample = $('#sample');
   $('#tryReset').onclick = () => (sample.textContent = 'hey can u send me the report when you get a chance');
@@ -459,7 +461,7 @@ async function renderSettings() {
     </div>
     <div class="set-group"><div class="g-title"><span class="g-ico">${icon('sliders', 15)}</span>Behavior</div>
       ${row('Show results in a window', 'Quick Actions shows the answer for review first. Turn off to paste it straight into your app.', sw('output_window'))}
-      ${row('Toolbar on selected text', 'Select text in any app to get Explain, Summarize, Translate and Fix right next to it.', sw('selection_toolbar'))}
+      ${row('Toolbar on selected text', 'Select text in any app to get the right buttons for it next to it: Fix and Shorten for your own text, Explain or Define for a word, Summarize for long text. Translate is always there.', sw('selection_toolbar'))}
       ${row('Closing the window', 'Keeyz keeps running in the tray so your shortcuts work everywhere.', seg('close_behavior', [['tray', 'Keep in tray'], ['quit', 'Quit']]))}
       ${row('Start on boot', 'Launch Keeyz when your computer starts.', sw('start_on_boot'))}
       ${row('Notifications', 'Show system notifications (results, reminders, errors).', sw('notifications'))}
@@ -549,17 +551,44 @@ function record(el, onDone, after = renderSettings, anyKey = false) {
 }
 
 // ============================================================ PROVIDER
+// Key status on each provider card: is the key really working, or what is wrong.
+const keyHealth = {}; // provider -> { state: 'ok'|'warn'|'bad'|'checking', label, detail }
+function keyBadge(id, keys) {
+  if (id === 'auto') return '<span class="badge">Recommended</span>';
+  const has = keys[id]?.set || (id === 'custom' && S.provider === 'custom');
+  if (!has) return id === 'custom' ? '<span class="badge neutral">No key needed</span>' : '<span class="faint">No key yet</span>';
+  return `<span class="kh" data-kh="${id}">${khHtml(keyHealth[id] || { state: 'checking' })}</span>`;
+}
+function khHtml(h) {
+  if (h.state === 'checking') return '<span class="kh-pill checking"><span class="spinner"></span>Checking key…</span>';
+  const ico = h.state === 'ok' ? icon('check', 11, 2.4) : h.state === 'warn' ? icon('info', 11, 2) : icon('x', 11, 2.4);
+  return `<span class="kh-pill ${h.state}" title="${esc(h.detail || '')}">${ico}${esc(h.label)}</span>`;
+}
+// Check every saved key (results are kept 10 min by Keeyz; force = check again now).
+async function checkKeys(keys, force = false) {
+  const ids = PROVIDERS.map((p) => p[0]).filter((id) => id !== 'auto' && (keys[id]?.set || (id === 'custom' && S.provider === 'custom')));
+  await Promise.all(ids.map(async (id) => {
+    if (force || !keyHealth[id]) {
+      keyHealth[id] = { state: 'checking' };
+      $$(`[data-kh="${id}"]`).forEach((el) => (el.innerHTML = khHtml(keyHealth[id])));
+    }
+    try { keyHealth[id] = await invoke('key_health', { provider: id, force }); } catch (e) { keyHealth[id] = { state: 'bad', label: 'Not working', detail: String(e) }; }
+    $$(`[data-kh="${id}"]`).forEach((el) => (el.innerHTML = khHtml(keyHealth[id])));
+  }));
+}
+
 const PROVIDERS = [
   ['auto', 'Auto · fastest', 'Uses the quickest model that works with your keys. Re-checks by itself.', []],
   ['openai', 'OpenAI', 'GPT models. Key starts with <code>sk-</code>', ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5-mini', 'gpt-5']],
   ['anthropic', 'Anthropic', 'Claude models. Key starts with <code>sk-ant-</code>', ['claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-opus-4-1']],
   ['gemini', 'Google Gemini', 'Free tier. Key starts with <code>AIza</code> or <code>AQ.</code>', ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest']],
   ['openrouter', 'OpenRouter', 'Hundreds of models, one key. Starts with <code>sk-or-</code>', ['openai/gpt-4o-mini', 'anthropic/claude-haiku-4.5', 'google/gemini-flash-latest', 'nvidia/nemotron-3.5-lightning:free', 'inclusionai/ling-3.2-flash:free']],
+  ['deepseek', 'DeepSeek', 'Low-cost models. Key from platform.deepseek.com, starts with <code>sk-</code>', ['deepseek-chat', 'deepseek-reasoner']],
   ['custom', 'Local / custom', 'Ollama, LM Studio or any OpenAI-compatible URL', ['llama3.2', 'qwen3:8b', 'mistral']],
 ];
 let modelCache = {};
 const testState = {}; // provider -> { ok, msg }
-const PDOT = { auto: '#2f6f64', openai: '#10a37f', anthropic: '#d97757', gemini: '#5b7fd1', openrouter: '#6366f1', custom: '#64748b' };
+const PDOT = { auto: '#2f6f64', openai: '#10a37f', anthropic: '#d97757', gemini: '#5b7fd1', openrouter: '#6366f1', deepseek: '#4d6bfe', custom: '#64748b' };
 const WF_ICON = { meeting_notes: 'fileText', email_responder: 'mail', translate_polish: 'globe' };
 // Things people paste into the model box that are not model ids (e.g. a Google Cloud project name).
 const NOT_A_MODEL = /^(gen-lang-client-|projects\/|AIza|AQ\.|sk-)/i;
@@ -584,12 +613,13 @@ async function renderProvider() {
     : k.set || pid === 'custom' ? '<span class="pill">Not tested yet</span>' : '<span class="pill">No key yet</span>';
 
   el.innerHTML = `<h1>AI Provider</h1>
-    <p class="lead">Keeyz runs on your own API key: unlimited, no credits. Requests go straight from this PC to the provider.</p>
+    <p class="lead">Keeyz runs on your own API key: unlimited, no credits. Requests go straight from this PC to the provider. If your model is busy, out of credit or unavailable, Keeyz switches by itself to the next fast model you have a key for (never for a local model).</p>
+    <div class="row" style="margin:-10px 0 12px"><span class="faint small">Each saved key is tested with a tiny request (costs next to nothing).</span><span class="spacer"></span><button class="btn ghost sm" id="recheckKeys">${icon('refresh', 13)} Check keys again</button></div>
     <div class="prov-grid">${PROVIDERS.map(([id, name, tag]) => `
       <button class="prov ${id === pid ? 'on' : ''}" data-p="${id}">
         <span class="p-head"><span class="p-dot" style="background:${PDOT[id]}"></span><span class="p-name">${name}</span>${id === pid ? `<span class="p-check">${icon('check', 12, 2.4)}</span>` : ''}</span>
         <span class="p-tag">${tag}</span>
-        <span class="p-foot">${id === 'auto' ? '<span class="badge">Recommended</span>' : keys[id]?.set ? `<span class="badge">${icon('key', 11)} Key saved</span>` : id === 'custom' ? '<span class="badge neutral">No key needed</span>' : '<span class="faint">No key</span>'}</span>
+        <span class="p-foot">${keyBadge(id, keys)}</span>
       </button>`).join('')}</div>
 
     <div class="set-group" style="margin-top:24px">
@@ -608,17 +638,20 @@ async function renderProvider() {
     <p class="faint small foot-note">${icon('mic', 13)} Voice typing needs an OpenAI or Gemini key (or a local Whisper server). Anthropic keys can't transcribe audio.</p>`;
 
   bindSwitches(el);
+  checkKeys(keys);
+  $('#recheckKeys').onclick = () => checkKeys(keys, true);
   $$('.prov', el).forEach((c) => (c.onclick = async () => { S = await saveSettings({ provider: c.dataset.p }); renderProvider(); }));
   $('#apiKey').onchange = async (e) => {
     const v = e.target.value.trim();
     if (!v) return;
     if (/^(gen-lang-client-|projects\/)/i.test(v)) return showTest({ ok: false, msg: 'That is a Google Cloud project name, not an API key. Copy the key from aistudio.google.com/apikey.' });
     try { await invoke('set_api_key', { provider: pid, key: v }); } catch (err) { return toast("Couldn't save key", String(err), true); }
+    delete keyHealth[pid];
     toast('Key saved', 'Checking it now…');
     await renderProvider();
     runTest();
   };
-  $('#clearKey')?.addEventListener('click', async () => { if (!confirm('Remove the saved key for this provider?')) return; await invoke('set_api_key', { provider: pid, key: '' }); delete testState[pid]; renderProvider(); });
+  $('#clearKey')?.addEventListener('click', async () => { if (!confirm('Remove the saved key for this provider?')) return; await invoke('set_api_key', { provider: pid, key: '' }); delete testState[pid]; delete keyHealth[pid]; renderProvider(); });
   $('#model').onchange = async (e) => {
     const v = e.target.value.trim();
     if (!v) return;
@@ -668,7 +701,7 @@ async function renderProvider() {
 async function renderAuto(el, keys) {
   const st = await invoke('fast_status');
   const r = st.ranking || { list: [] };
-  const withKey = ['gemini', 'openrouter', 'openai', 'anthropic'].filter((x) => keys[x]?.set);
+  const withKey = ['gemini', 'openrouter', 'openai', 'anthropic', 'deepseek'].filter((x) => keys[x]?.set);
   const ok = r.list.filter((c) => c.ok);
   const when = r.updated ? new Date(r.updated).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'never';
   const name = (pid) => PROVIDERS.find((x) => x[0] === pid)?.[1] || pid;
@@ -689,6 +722,7 @@ async function renderAuto(el, keys) {
     </div>
     ${withKey.length ? '' : '<p class="faint small foot-note">Add a key first: pick Google Gemini above (it has a free tier), paste your key, then come back to Auto.</p>'}`;
   bindProvCards(el);
+  checkKeys(keys);
   $('#findFast')?.addEventListener('click', async () => {
     $('#findFast').disabled = true;
     $('#findFast').innerHTML = '<div class="spinner"></div> Checking… (about 15 s)';
@@ -701,7 +735,7 @@ const provCards = (keys) => PROVIDERS.map(([id, name, tag]) => `
       <button class="prov ${id === S.provider ? 'on' : ''}" data-p="${id}">
         <span class="p-head"><span class="p-dot" style="background:${PDOT[id]}"></span><span class="p-name">${name}</span>${id === S.provider ? `<span class="p-check">${icon('check', 12, 2.4)}</span>` : ''}</span>
         <span class="p-tag">${tag}</span>
-        <span class="p-foot">${id === 'auto' ? '<span class="badge">Recommended</span>' : keys[id]?.set ? `<span class="badge">${icon('key', 11)} Key saved</span>` : id === 'custom' ? '<span class="badge neutral">No key needed</span>' : '<span class="faint">No key</span>'}</span>
+        <span class="p-foot">${keyBadge(id, keys)}</span>
       </button>`).join('');
 const bindProvCards = (el) => $$('.prov', el).forEach((c) => (c.onclick = async () => { S = await saveSettings({ provider: c.dataset.p }); renderProvider(); }));
 
@@ -727,6 +761,7 @@ async function pickModel(pid) {
     openai: [/^gpt-[\d.]+-mini$/, /^gpt-4o-mini$/, /^gpt/],
     anthropic: [/haiku/, /sonnet/],
     openrouter: [/gpt-4o-mini/, /flash/],
+    deepseek: [/^deepseek-chat$/],
     custom: [/./],
   }[pid] || [/./];
   const cands = list.filter(ok).sort().reverse();
@@ -781,7 +816,7 @@ function welcome(force = false) {
   const sc = S.shortcuts, w = esc(S.trigger_word);
   openModal(`<div class="welcome-head"><img src="${logoUrl}" /><div><h1 style="margin:0;font-size:21px">Welcome to Keeyz</h1><div class="muted">AI that types where you type. Select text, press a key, done.</div></div></div>
     <div class="welcome-steps">
-      <div class="welcome-step"><span class="n">1</span><div><b>Add your AI key</b><div class="muted small">OpenAI, Anthropic, Gemini, OpenRouter or a local model. Stored only on this PC.</div></div></div>
+      <div class="welcome-step"><span class="n">1</span><div><b>Add your AI key</b><div class="muted small">OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek or a local model. Stored only on this PC.</div></div></div>
       <div class="welcome-step"><span class="n">2</span><div><b>Select text, press ${kbd(sc.actions)}</b><div class="muted small">Pick Fix, Shorten, Translate… or describe the change.</div></div></div>
       <div class="welcome-step"><span class="n">3</span><div><b>Or type it: <i>your text ${w} make it shorter</i> + space twice</b><div class="muted small">Works in every app. Esc cancels.</div></div></div>
       <div class="welcome-step"><span class="n">4</span><div><b>Or just select text</b><div class="muted small">A small toolbar appears next to your selection with the right buttons for it. ⋯ opens every action.</div></div></div>

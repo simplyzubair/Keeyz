@@ -1,5 +1,5 @@
 //! Talks to the AI providers with the user's own key.
-//! Supported: OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, any OpenAI-compatible endpoint.
+//! Supported: OpenAI, Anthropic (Claude), Google Gemini, OpenRouter, DeepSeek, any OpenAI-compatible endpoint.
 
 use crate::settings::Settings;
 use anyhow::{anyhow, bail, Result};
@@ -80,6 +80,7 @@ fn friendly_status(provider: &str, status: u16, body: &str) -> anyhow::Error {
         "anthropic" => "Anthropic",
         "gemini" => "Gemini",
         "openrouter" => "OpenRouter",
+        "deepseek" => "DeepSeek",
         "custom" => "Your endpoint",
         _ => "OpenAI",
     };
@@ -99,9 +100,13 @@ fn friendly_status(provider: &str, status: u16, body: &str) -> anyhow::Error {
             "openai" => " Add credit at platform.openai.com → Settings → Billing (API use is billed separately from chat subscriptions).",
             "anthropic" => " Add credit at console.anthropic.com → Billing.",
             "openrouter" => " Add credit at openrouter.ai/settings/credits.",
+            "deepseek" => " Top up at platform.deepseek.com → Top up.",
             _ => "",
         };
         return anyhow!("Your key works, but your {name} account has no API credit left.{fix}");
+    }
+    if provider == "deepseek" && status == 402 {
+        return anyhow!("Your DeepSeek key works, but the account has no balance. Top up at platform.deepseek.com → Top up, then try again.");
     }
     // Key works but has no budget / credit left (OpenRouter key limits, prepaid credit).
     if matches!(status, 402 | 403)
@@ -151,24 +156,115 @@ fn openai_base(s: &Settings) -> String {
 fn openai_base_for(s: &Settings, provider: &str) -> String {
     match provider {
         "openrouter" => "https://openrouter.ai/api/v1".into(),
+        "deepseek" => "https://api.deepseek.com/v1".into(),
         "custom" => s.endpoint_url.trim_end_matches('/').to_string(),
         _ => "https://api.openai.com/v1".into(),
     }
 }
 
 /// Main entry: run a chat completion. `on_delta` gets streamed text pieces.
-/// If Gemini is overloaded, it falls back once to the lighter Flash-Lite model.
+/// If the chosen model fails before any text arrived (busy, no quota/credit, model gone, too
+/// slow to start, key refused), Keeyz moves on by itself: Gemini first tries Flash-Lite, then the
+/// fastest other working models the user has keys for (DeepSeek, GPT mini, Haiku, OpenRouter…).
 pub async fn complete(req: Request<'_>, mut on_delta: impl FnMut(&str)) -> Result<String> {
     if req.settings.provider == "auto" {
         return complete_auto(&req, &mut on_delta).await;
     }
     let model = req.settings.model();
-    match complete_with(&req, &model, &mut on_delta, None).await {
-        Err(e) if req.settings.provider == "gemini" && e.to_string().contains("busy right now") && model != "gemini-flash-lite-latest" => {
-            complete_with(&req, "gemini-flash-lite-latest", &mut on_delta, None).await
+    // A local / custom model never hands the text to a cloud service. Without other keys there is
+    // nothing to switch to, so the chosen model gets its usual patient retries instead.
+    let can_switch = req.settings.provider != "custom" && !fallback_models(req.settings, &req.settings.provider, &model, false).is_empty();
+    let mut got_text = false;
+    let first = {
+        let mut cb = |d: &str| {
+            if !d.is_empty() {
+                got_text = true;
+            }
+            on_delta(d)
+        };
+        complete_with(&req, &model, &mut cb, if can_switch { Some(Duration::from_secs(12)) } else { None }).await
+    };
+    let err = match first {
+        Ok(out) => {
+            *crate::fast::LAST_USED.lock().unwrap() = format!("{} · {model}", req.settings.provider);
+            return Ok(out);
         }
-        r => r,
+        Err(e) => e,
+    };
+    if got_text || !can_switch || !worth_switching(&err) {
+        return Err(err);
     }
+    let failed_provider = req.settings.provider.clone();
+    let whole_account = is_account_problem(&err);
+    let mut last = err;
+    let mut tries = 0;
+    for (provider, m) in fallback_models(req.settings, &failed_provider, &model, whole_account) {
+        if tries >= 4 {
+            break;
+        }
+        tries += 1;
+        let mut s = req.settings.clone();
+        s.provider = provider.clone();
+        let r = Request { system: req.system.clone(), messages: req.messages.clone(), settings: &s, max_tokens: req.max_tokens };
+        match complete_with(&r, &m, &mut on_delta, Some(Duration::from_secs(8))).await {
+            Ok(out) => {
+                crate::hook::dbg_log!("[ai] {failed_provider} · {model} failed, used {provider} · {m}");
+                *crate::fast::LAST_USED.lock().unwrap() = format!("{provider} · {m}");
+                return Ok(out);
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// Errors where another model can help. A problem with the text itself (far too long, etc.) or no
+/// internet at all would fail everywhere, so those are shown straight away.
+fn worth_switching(e: &anyhow::Error) -> bool {
+    let m = e.to_string().to_lowercase();
+    if m.contains("can't reach the ai server") || m.contains("too long") || m.contains("context length") {
+        return false;
+    }
+    true
+}
+
+/// The whole account can't answer right now (no credit / quota, key refused): skip its other models too.
+fn is_account_problem(e: &anyhow::Error) -> bool {
+    let m = e.to_string().to_lowercase();
+    m.contains("limit") || m.contains("quota") || m.contains("credit") || m.contains("balance") || m.contains("did not accept this key")
+}
+
+/// Fast, low-cost models to try after `failed` – measured fastest first (Auto ranking), then
+/// sensible defaults for every provider that has a key.
+pub fn fallback_models(s: &Settings, failed: &str, failed_model: &str, skip_provider: bool) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = vec![];
+    let mut add = |p: &str, m: &str| {
+        let bad = (p == failed && (skip_provider || m == failed_model)) || m.is_empty();
+        if !bad && !out.iter().any(|(op, om)| op == p && om == m) {
+            out.push((p.to_string(), m.to_string()));
+        }
+    };
+    // Gemini busy: its lighter model first (same key, usually free and fast)
+    if failed == "gemini" && !skip_provider {
+        add("gemini", "gemini-flash-lite-latest");
+    }
+    for (p, m) in crate::fast::ranked() {
+        add(&p, &m);
+    }
+    let pick = |p: &str, d: &str| s.models.get(p).filter(|m| !m.trim().is_empty()).cloned().unwrap_or_else(|| d.to_string());
+    for (p, m) in [
+        ("gemini", "gemini-flash-lite-latest".to_string()),
+        ("gemini", "gemini-flash-latest".to_string()),
+        ("deepseek", "deepseek-chat".to_string()),
+        ("openai", "gpt-4o-mini".to_string()),
+        ("openrouter", pick("openrouter", "openai/gpt-4o-mini")),
+        ("anthropic", "claude-haiku-4-5".to_string()),
+    ] {
+        if has_key(p) {
+            add(p, &m);
+        }
+    }
+    out
 }
 
 /// Auto mode: use the fastest working model; if it is slow to start or fails, move to the next one.
@@ -409,6 +505,16 @@ pub async fn test_connection(settings: &Settings) -> Result<String> {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    #[test]
+    fn switching_rules() {
+        assert!(worth_switching(&anyhow!("Gemini is busy right now (tried 4 times).")));
+        assert!(worth_switching(&anyhow!("Your key works, but your DeepSeek account has no API credit left.")));
+        assert!(!worth_switching(&anyhow!("Can't reach the AI server. Check your internet, VPN or firewall.")));
+        assert!(is_account_problem(&anyhow!("Gemini's free daily limit is used up.")));
+        assert!(is_account_problem(&anyhow!("Your DeepSeek key works, but the account has no balance.")));
+        assert!(!is_account_problem(&anyhow!("This model is slow right now.")));
+    }
+
     #[test]
     fn cleans_output() {
         assert_eq!(clean_output("<think>x</think>Hello"), "Hello");

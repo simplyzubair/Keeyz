@@ -317,6 +317,7 @@ pub fn run() {
             commands::reset_section,
             commands::key_status,
             commands::set_api_key,
+            commands::key_health,
             commands::test_connection,
             commands::list_models,
             commands::get_capture,

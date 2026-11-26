@@ -368,6 +368,9 @@ fn register_keys(app: &AppHandle) {
         use windows::Win32::System::Threading::GetCurrentThreadId;
         use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG, WH_KEYBOARD_LL};
         HOOK_THREAD.store(GetCurrentThreadId(), Ordering::SeqCst);
+        for h in &HELD_AT {
+            h.store(0, Ordering::SeqCst);
+        }
         let _ = windows::Win32::System::Threading::SetThreadPriority(
             windows::Win32::System::Threading::GetCurrentThread(),
             windows::Win32::System::Threading::THREAD_PRIORITY_HIGHEST,
@@ -398,15 +401,54 @@ fn unregister_keys(_app: &AppHandle) {
 
 /// Low-level keyboard hook, only installed in snap mode. Must return fast: it only looks the
 /// key up and hands the command to the worker thread.
+/// When Ctrl / Shift / Alt went down, as seen by the snap hook itself (ms since 1970, 0 = up).
+/// Windows' own key state can lag a moment behind; a remembered press only counts for 1 s, so a
+/// missed key-up can never leave a modifier "stuck".
+static HELD_AT: [std::sync::atomic::AtomicU64; 3] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
+fn held_recently(bit: u8) -> bool {
+    let i = match bit { CTRL => 0, SHIFT => 1, _ => 2 };
+    let at = HELD_AT[i].load(Ordering::SeqCst);
+    at != 0 && crate::hook::now_ms().saturating_sub(at) < 1000
+}
+
+fn modifier_bit(vk: u32) -> u8 {
+    match vk {
+        0x11 | 0xA2 | 0xA3 => CTRL,
+        0x10 | 0xA0 | 0xA1 => SHIFT,
+        0x12 | 0xA4 | 0xA5 => ALT,
+        _ => 0,
+    }
+}
+
 unsafe extern "system" fn key_hook(code: i32, w: windows::Win32::Foundation::WPARAM, l: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN};
     let down = w.0 as u32 == WM_KEYDOWN || w.0 as u32 == WM_SYSKEYDOWN;
+    if code == HC_ACTION as i32 {
+        let k = &*(l.0 as *const KBDLLHOOKSTRUCT);
+        let bit = modifier_bit(k.vkCode);
+        if bit != 0 {
+            let i = match bit { CTRL => 0, SHIFT => 1, _ => 2 };
+            if down {
+                if HELD_AT[i].load(Ordering::SeqCst) == 0 {
+                    HELD_AT[i].store(crate::hook::now_ms(), Ordering::SeqCst); // first press, not key repeat
+                }
+            } else {
+                HELD_AT[i].store(0, Ordering::SeqCst);
+            }
+        }
+    }
     if code == HC_ACTION as i32 && down && !crate::state::INJECTING.load(Ordering::SeqCst) {
         let k = &*(l.0 as *const KBDLLHOOKSTRUCT);
-        let mods = (if winutil::is_down(0x11) { CTRL } else { 0 })
-            | (if winutil::is_down(0x10) { SHIFT } else { 0 })
-            | (if winutil::is_down(0x12) { ALT } else { 0 });
+        // held = seen by this hook OR reported by Windows (covers keys pressed before the hook started)
+        let mods = (if winutil::is_down(0x11) || held_recently(CTRL) { CTRL } else { 0 })
+            | (if winutil::is_down(0x10) || held_recently(SHIFT) { SHIFT } else { 0 })
+            | (if winutil::is_down(0x12) || held_recently(ALT) { ALT } else { 0 });
         let hit = ACTIVE_KEYS.lock().ok().and_then(|keys| keys.iter().find(|(m, v, _)| *m == mods && *v as u32 == k.vkCode).map(|x| x.2));
         if let Some(cmd) = hit {
             crate::hook::dbg_log!("[snap] key caught: {cmd:?}");

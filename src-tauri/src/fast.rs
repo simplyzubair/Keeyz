@@ -116,6 +116,8 @@ fn pick(provider: &str, ids: &[String]) -> Vec<String> {
             v
         }
         "openrouter" => ok.iter().filter(|m| m.ends_with(":free")).take(8).map(|s| s.to_string()).collect(),
+        // the fast chat model (the reasoner thinks first and is slow for short writing jobs)
+        "deepseek" => ok.iter().filter(|m| m.as_str() == "deepseek-chat").map(|s| s.to_string()).collect(),
         "openai" => {
             let mut v: Vec<String> = ok.iter().filter(|m| m.contains("mini") && !m.contains("nano-") && m.starts_with("gpt")).map(|s| s.to_string()).collect();
             v.sort();
@@ -167,7 +169,7 @@ pub async fn benchmark(settings: &Settings) -> Result<Ranking> {
         }
         *r = true;
     }
-    let providers: Vec<&str> = ["gemini", "openrouter", "openai", "anthropic"].into_iter().filter(|p| ai::has_key(p)).collect();
+    let providers: Vec<&str> = ["gemini", "openrouter", "openai", "anthropic", "deepseek"].into_iter().filter(|p| ai::has_key(p)).collect();
     let jobs = providers.iter().map(|p| {
         let p = p.to_string();
         let s = settings.clone();

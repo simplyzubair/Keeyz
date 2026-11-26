@@ -225,6 +225,7 @@ pub fn default_models() -> HashMap<String, String> {
         ("anthropic", "claude-haiku-4-5"),
         ("gemini", "gemini-flash-latest"),
         ("openrouter", "openai/gpt-4o-mini"),
+        ("deepseek", "deepseek-chat"),
         ("custom", "llama3.2"),
     ]
     .into_iter()

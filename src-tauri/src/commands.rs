@@ -135,7 +135,7 @@ pub fn reset_section(app: AppHandle, st: State<AppState>, section: String) -> R<
 #[tauri::command]
 pub fn key_status() -> Value {
     let mut m = serde_json::Map::new();
-    for p in ["openai", "anthropic", "gemini", "openrouter", "custom"] {
+    for p in ["openai", "anthropic", "gemini", "openrouter", "deepseek", "custom"] {
         let k = ai::get_key(p);
         let masked = if k.len() > 8 { format!("{}…{}", &k[..4], &k[k.len() - 4..]) } else if k.is_empty() { String::new() } else { "••••".into() };
         m.insert(p.into(), json!({"set": !k.is_empty(), "masked": masked}));
@@ -145,7 +145,56 @@ pub fn key_status() -> Value {
 
 #[tauri::command]
 pub fn set_api_key(provider: String, key: String) -> R<()> {
+    KEY_HEALTH.lock().unwrap().remove(&provider); // a new key gets checked again
     ai::set_key(&provider, &key).map_err(e)
+}
+
+/// Last key check per provider (kept 10 minutes, so the AI Provider page opens instantly).
+static KEY_HEALTH: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Value)>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Does this provider's key really work? A tiny request (a few tokens) with its model.
+/// state: "ok" | "warn" (key fine, but no credit / busy / model missing) | "bad" (key refused…)
+#[tauri::command]
+pub async fn key_health(st: State<'_, AppState>, provider: String, force: Option<bool>) -> R<Value> {
+    if !force.unwrap_or(false) {
+        if let Some((at, v)) = KEY_HEALTH.lock().unwrap().get(&provider) {
+            if at.elapsed() < Duration::from_secs(600) {
+                return Ok(v.clone());
+            }
+        }
+    }
+    let mut s = st.settings();
+    s.provider = provider.clone();
+    s.custom_model.clear();
+    let model = s.model();
+    let req = Request { system: "Reply with the single word OK.".into(), messages: vec![Msg::user("ping")], settings: &s, max_tokens: 8 };
+    let t0 = std::time::Instant::now();
+    let v = match ai::complete_raw(&req, &model, Some(Duration::from_secs(15))).await {
+        Ok(_) => json!({ "state": "ok", "label": format!("Working · {:.1} s", t0.elapsed().as_secs_f32()), "model": model, "detail": format!("{model} answered.") }),
+        Err(err) => {
+            let msg = err.to_string();
+            let low = msg.to_lowercase();
+            let (state, label) = if low.contains("did not accept") || low.contains("no api key") {
+                ("bad", "Key not accepted")
+            } else if low.contains("credit") || low.contains("balance") || low.contains("quota") || low.contains("spending limit") {
+                ("warn", "No credit left")
+            } else if low.contains("daily limit") || low.contains("free-tier limit") || low.contains("limit") {
+                ("warn", "Limit reached for now")
+            } else if low.contains("model not found") {
+                ("warn", "Model not found")
+            } else if low.contains("busy") || low.contains("slow") || low.contains("too many") {
+                ("warn", "Busy right now")
+            } else if low.contains("can't reach") || low.contains("no answer in time") {
+                ("warn", "Can't reach server")
+            } else {
+                ("bad", "Not working")
+            };
+            json!({ "state": state, "label": label, "model": model, "detail": msg })
+        }
+    };
+    KEY_HEALTH.lock().unwrap().insert(provider, (std::time::Instant::now(), v.clone()));
+    Ok(v)
 }
 
 #[tauri::command]
@@ -889,7 +938,7 @@ pub fn app_info(app: AppHandle, st: State<AppState>) -> Value {
 
 #[tauri::command]
 pub fn delete_everything(app: AppHandle, st: State<AppState>, store: State<Arc<ClipStore>>) -> R<()> {
-    for p in ["openai", "anthropic", "gemini", "openrouter", "custom"] {
+    for p in ["openai", "anthropic", "gemini", "openrouter", "deepseek", "custom"] {
         let _ = ai::set_key(p, "");
     }
     store.clear();
