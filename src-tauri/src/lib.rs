@@ -204,6 +204,7 @@ pub fn run() {
             let st = AppState::new(dir.clone());
             let first_run = !st.settings().onboarded;
             let on_top = st.settings().always_on_top;
+            let st_boot = st.settings().start_on_boot;
             app.manage(st);
             let store = Arc::new(clipboard::ClipStore::new(&dir));
             app.manage(store.clone());
@@ -213,18 +214,26 @@ pub fn run() {
             register_shortcuts(&handle);
             clipboard::start_watcher(handle.clone(), store);
             hook::start(handle.clone());
-            // Look for a new version shortly after start, then every 6 hours.
+            // Look for a new version shortly after start, then every hour. A new version gets a
+            // small "Update now / Later" pop-up once (it stays in the tray menu after "Later").
             let h3 = handle.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                let mut asked = String::new();
                 loop {
                     if let Ok(v) = commands::find_update(&h3).await {
                         if v["available"] == true {
-                            tray_update_ready(v["version"].as_str().unwrap_or_default());
+                            let ver = v["version"].as_str().unwrap_or_default().to_string();
+                            tray_update_ready(&ver);
+                            *commands::PENDING_UPDATE.lock().unwrap() = Some(v.clone());
                             let _ = h3.emit("update-available", &v);
+                            if ver != asked {
+                                asked = ver;
+                                windows_mgr::show_update_popup(&h3, v);
+                            }
                         }
                     }
-                    tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                 }
             });
             // Auto mode: keep the "fastest model" list fresh (checks at start, then every 12 hours).
@@ -240,9 +249,14 @@ pub fn run() {
                 }
             });
 
-            if first_run {
+            // Start with Windows: make the Windows start-up entry match the setting on every start.
+            // (Only setting it on the first run missed PCs that first ran Keeyz under an older name,
+            // so Keeyz - and Snap with it - was not running after a restart.)
+            {
                 use tauri_plugin_autostart::ManagerExt;
-                let _ = handle.autolaunch().enable();
+                let al = handle.autolaunch();
+                let want = st_boot || first_run;
+                let _ = if want { al.enable() } else { al.disable() };
             }
             let hidden = std::env::args().any(|a| a == "--hidden");
             if let Some(w) = app.get_webview_window("main") {
@@ -323,6 +337,7 @@ pub fn run() {
             commands::ocr_capture,
             commands::voice_transcribe,
             commands::snap_start,
+            commands::pending_update,
             commands::snap_stop,
             commands::snap_pick,
             commands::snap_state,

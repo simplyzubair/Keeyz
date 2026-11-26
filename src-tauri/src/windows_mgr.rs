@@ -20,6 +20,7 @@ pub const TOOLBAR: Spec = Spec { label: "toolbar", page: "toolbar.html", w: 380.
 pub const TYPING: Spec = Spec { label: "typing", page: "typing.html", w: 190.0, h: 40.0, focus: false, transparent: true };
 pub const SNAPBADGE: Spec = Spec { label: "snapbadge", page: "snap-badge.html", w: 132.0, h: 34.0, focus: false, transparent: true };
 pub const SNAPPICKER: Spec = Spec { label: "snappicker", page: "snap-picker.html", w: 280.0, h: 452.0, focus: true, transparent: true };
+pub const UPDATE: Spec = Spec { label: "update", page: "update.html", w: 420.0, h: 250.0, focus: true, transparent: false };
 pub const WORKFLOW: Spec = Spec { label: "workflow", page: "workflow-results.html", w: 640.0, h: 640.0, focus: true, transparent: false };
 
 /// Windows handles of our popup windows, so other threads can show / hide / compare them
@@ -204,6 +205,20 @@ pub fn show_toolbar(app: &AppHandle, text: String, editable: bool, hwnd: isize, 
                     let _ = w.show();
                 }
             }
+        }
+    });
+}
+
+/// "Keeyz x.y.z is ready – Update now / Later". Shown without taking focus, so it never
+/// swallows what the user is typing; one click on "Update now" installs and restarts.
+pub fn show_update_popup(app: &AppHandle, info: serde_json::Value) {
+    let app2 = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Ok(w) = get_or_create(&app2, &UPDATE) else { return };
+        place(&app2, &w, Place::BottomCenter);
+        let _ = w.emit("update-info", info);
+        if let Ok(h) = w.hwnd() {
+            crate::winutil::show_no_activate(h.0 as isize);
         }
     });
 }

@@ -790,6 +790,14 @@ pub async fn find_update(app: &AppHandle) -> anyhow::Result<Value> {
     }
 }
 
+/// The newest version found by the background check (for the update pop-up).
+pub static PENDING_UPDATE: once_cell::sync::Lazy<std::sync::Mutex<Option<Value>>> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(None));
+
+#[tauri::command]
+pub fn pending_update() -> Option<Value> {
+    PENDING_UPDATE.lock().unwrap().clone()
+}
+
 #[tauri::command]
 pub async fn check_update(app: AppHandle) -> R<Value> {
     find_update(&app).await.map_err(|err| format!("Couldn't check for updates: {err}"))

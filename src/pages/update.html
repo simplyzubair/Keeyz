@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Update ready</title>
+  <link rel="stylesheet" href="./lib/base.css" />
+  <style>
+    .wrap { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; height: 100vh; box-sizing: border-box; }
+    .head { display: flex; align-items: center; gap: 12px; }
+    .head img { width: 34px; height: 34px; border-radius: 9px; }
+    .head b { display: block; font-size: 15px; letter-spacing: -.01em; }
+    .notes { flex: 1; overflow: auto; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
+    .foot { display: flex; gap: 8px; align-items: center; }
+    .bar { flex: 1; height: 4px; border-radius: 2px; background: var(--bg-3); overflow: hidden; }
+    .bar b { display: block; height: 100%; width: 0; background: var(--ink); transition: width .2s; }
+  </style>
+</head>
+<body>
+  <div class="popup"><div class="wrap" data-tauri-drag-region>
+    <div class="head" data-tauri-drag-region><img src="./lib/logo.svg" alt="" /><div><b id="title">A new Keeyz is ready</b><span class="faint small" id="sub"></span></div></div>
+    <div class="notes" id="notes"></div>
+    <div class="foot" id="ask"><span class="faint small">Takes a few seconds. Settings and keys stay.</span><span class="spacer"></span><button class="btn" id="later">Later</button><button class="btn primary" id="now">Update now</button></div>
+    <div class="foot hidden" id="busy"><span class="small" id="state">Downloading…</span><span class="bar"><b id="fill"></b></span></div>
+  </div></div>
+  <script type="module">
+    import { boot, invoke, listen, $, esc, toast } from './lib/core.js';
+    await boot();
+    const show = (u) => {
+      if (!u) return;
+      $('#title').textContent = `Keeyz ${u.version} is ready`;
+      $('#sub').textContent = u.current ? `You have ${u.current}` : '';
+      $('#notes').innerHTML = esc(u.notes || 'Fixes and improvements.');
+    };
+    listen('update-info', (e) => show(e.payload));
+    show(await invoke('pending_update').catch(() => null));
+    $('#later').onclick = () => invoke('hide_me');
+    $('#now').onclick = async () => {
+      $('#ask').classList.add('hidden'); $('#busy').classList.remove('hidden');
+      try { await invoke('install_update'); } catch (e) {
+        $('#busy').classList.add('hidden'); $('#ask').classList.remove('hidden');
+        toast('Update failed', String(e), true);
+      }
+    };
+    listen('update-progress', (e) => { $('#fill').style.width = `${e.payload}%`; $('#state').textContent = e.payload >= 100 ? 'Installing…' : `Downloading… ${e.payload}%`; });
+  </script>
+</body>
+</html>
